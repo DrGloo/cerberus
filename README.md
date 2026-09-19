@@ -27,7 +27,7 @@ scripts/
   review.sh                   the same review over a branch or any range, for a PR
   review-regress.sh           replays the fixtures through the real hook and checks verdicts
   guard-probes.sh             83 probes of the agent guard, no model, sub-second
-  backstop-probes.sh          20 probes of the ledger, attestation and re-review logic, no model
+  backstop-probes.sh          22 probes of the ledger, attestation, re-review and timeout logic, no model
 install.sh                    copies all of the above into a repository and wires it up
 selftest.sh                   installs into a throwaway repo and runs every probe suite
 templates/                    the agent guard registration and a CI workflow

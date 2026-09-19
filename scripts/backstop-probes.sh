@@ -229,6 +229,31 @@ else
 	bad "unresolvable base (rc=$rc out=$out)"
 fi
 
+# --- 3.5: the timeout watcher --------------------------------------------------
+# review_run_with_timeout must return as soon as the command does, leave no
+# sleep of its own behind, and still enforce the deadline on a command that
+# hangs. The deadline here is deliberately long so a leftover sleep would be
+# unmistakable.
+(
+	# shellcheck source=/dev/null
+	. "$HOOKS/lib/review-core.sh"
+	before="$(pgrep -f 'sleep 300' 2>/dev/null | wc -l | tr -d ' ')"
+	start="$(date +%s)"
+	review_run_with_timeout 300 "$S/fast.out" sh -c 'echo fast'; rc=$?
+	elapsed=$(( $(date +%s) - start ))
+	sleep 1
+	after="$(pgrep -f 'sleep 300' 2>/dev/null | wc -l | tr -d ' ')"
+	[ "$rc" -eq 0 ] && [ "$elapsed" -le 5 ] && [ "$(cat "$S/fast.out")" = "fast" ] && [ "$after" -le "$before" ]
+) && ok "watcher: a fast command returns at once and leaves no sleep behind" || bad "watcher fast path"
+(
+	# shellcheck source=/dev/null
+	. "$HOOKS/lib/review-core.sh"
+	start="$(date +%s)"
+	review_run_with_timeout 1 "$S/slow.out" sleep 30; rc=$?
+	elapsed=$(( $(date +%s) - start ))
+	[ "$rc" -eq 124 ] && [ "$elapsed" -le 10 ]
+) && ok "watcher: a hung command is killed at the deadline with rc 124" || bad "watcher deadline"
+
 echo
 echo "backstop-probes: $((checks - fail))/$checks checks passed"
 [ "$fail" -eq 0 ]

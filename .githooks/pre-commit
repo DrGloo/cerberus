@@ -173,7 +173,7 @@ esac
 # A verdict on a truncated diff is never cached: a cache hit would skip the
 # truncation branch below and attest on the second run what the first did not.
 if ! review_diff_truncated "$TMP/diff"; then
-	cat "$TMP/out" >"$CACHE_FILE"
+	cp "$TMP/out" "$CACHE_FILE"
 fi
 # Always-readable copy of the most recent review (agents and humans can `cat` it after the commit).
 {
