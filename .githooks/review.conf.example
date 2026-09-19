@@ -34,16 +34,6 @@ REVIEW_EXTRA_IGNORE=
 #   REVIEW_LINT_CMD="shellcheck -S error"                      # shell
 REVIEW_LINT_CMD=
 
-# Reserved, used by later changes: the linters and formatters the project
-# runs, space-separated, so the reviewer is told which rules are not its
-# business (formatting, import order, unused variables the linter flags).
-#   REVIEW_LINT_TOOLS="selene stylua"
-
-# Reserved, used by later changes: an extended regex matched against the
-# path and the staged content of each changed file; a match attaches the
-# whole file to the prompt regardless of REVIEW_CONTEXT_THRESHOLD.
-#   REVIEW_CONTEXT_PATTERNS="OnServerEvent|OnServerInvoke"
-
 # Timeouts, in seconds. The base covers the first 60000 bytes of prompt;
 # every further 60000 bytes adds 90 seconds, capped at REVIEW_TIMEOUT_MAX.
 # A timeout fails open (the commit goes through, is ledgered, and is
@@ -56,7 +46,3 @@ REVIEW_TIMEOUT_MAX=600
 REVIEW_CONTEXT_THRESHOLD=30
 REVIEW_MAX_DIFF_BYTES=200000
 REVIEW_MAX_CONTEXT_BYTES=60000
-
-# Reserved, used by later changes: how many file chunks an oversize diff may
-# be split into before pre-push refuses the range.
-#   REVIEW_MAX_CHUNKS=6

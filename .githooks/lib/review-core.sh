@@ -12,7 +12,7 @@
 # below on purpose: a default assigned first would win over the file.
 # Environment values set by the caller beat the file because the loader
 # skips any key that is already set.
-REVIEW_CONF_KEYS="REVIEW_MODEL REVIEW_SOURCE_DIRS REVIEW_EXTRA_IGNORE REVIEW_LINT_CMD REVIEW_LINT_TOOLS REVIEW_CONTEXT_PATTERNS REVIEW_TIMEOUT REVIEW_TIMEOUT_MAX REVIEW_CONTEXT_THRESHOLD REVIEW_MAX_DIFF_BYTES REVIEW_MAX_CONTEXT_BYTES REVIEW_MAX_CHUNKS"
+REVIEW_CONF_KEYS="REVIEW_MODEL REVIEW_SOURCE_DIRS REVIEW_EXTRA_IGNORE REVIEW_LINT_CMD REVIEW_TIMEOUT REVIEW_TIMEOUT_MAX REVIEW_CONTEXT_THRESHOLD REVIEW_MAX_DIFF_BYTES REVIEW_MAX_CONTEXT_BYTES"
 
 # review_load_conf <file>: assign the allowlisted keys from a KEY=VALUE file.
 # Blank lines and `#` comments are skipped silently. Every other line that is
@@ -21,7 +21,7 @@ REVIEW_CONF_KEYS="REVIEW_MODEL REVIEW_SOURCE_DIRS REVIEW_EXTRA_IGNORE REVIEW_LIN
 # skipped, so a config written in the old shell format is loud until fixed.
 # Nothing here evaluates the file: the value is stored with `printf -v`.
 review_load_conf() {
-	local file="$1" line key value n=0 preset=" "
+	local file="$1" line key value legacy lead n=0 preset=" " legacy_noted=0
 	[ -f "$file" ] || return 0
 	# Keys the caller already set, snapshotted before the file is read so a
 	# key the file assigns twice still takes the later line.
@@ -44,9 +44,6 @@ review_load_conf() {
 			*" $key "*) ;;
 			*) review_conf_note "$n" "$line"; continue ;;
 		esac
-		case "$value" in
-			*'$'*|*'`'*) review_conf_note "$n" "$line"; continue ;;
-		esac
 		# One layer of matching quotes, and only when both ends carry them.
 		if [ "${#value}" -ge 2 ]; then
 			case "$value" in
@@ -54,6 +51,29 @@ review_load_conf() {
 				\'*\') value="${value#\'}"; value="${value%\'}" ;;
 			esac
 		fi
+		# Legacy form: KEY="${KEY:-literal}" from the era when the file was
+		# sourced. Exactly that shape, the same KEY, and a literal free of `$`
+		# and backticks is read as the literal; nothing is expanded.
+		lead='${'"$key"':-'
+		case "$value" in
+			"$lead"*'}')
+				legacy="${value#"$lead"}"
+				legacy="${legacy%\}}"
+				case "$legacy" in
+					*'$'*|*'`'*) ;;
+					*)
+						value="$legacy"
+						if [ "$legacy_noted" = 0 ]; then
+							legacy_noted=1
+							printf '[review] note: review.conf uses the legacy ${VAR:-default} form; rewrite it as KEY=value\n' >&2
+						fi
+						;;
+				esac
+				;;
+		esac
+		case "$value" in
+			*'$'*|*'`'*) review_conf_note "$n" "$line"; continue ;;
+		esac
 		# Environment wins: a key the caller already set is left alone.
 		case "$preset" in *" $key "*) continue ;; esac
 		printf -v "$key" '%s' "$value"

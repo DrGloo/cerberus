@@ -5,6 +5,10 @@
 # scratch hook directory holding a copy of the real lib; sub-second, no
 # secrets, no git repository needed.
 set -u
+# Never inherit the caller's tuning: an exported REVIEW_MODEL or REVIEW_TIMEOUT
+# would beat the fake review.conf and fail probes that have nothing wrong.
+# shellcheck disable=SC2046
+unset $(compgen -v REVIEW_) 2>/dev/null
 R="$(cd "$(dirname "$0")/.." && pwd)"
 S="$(mktemp -d "${TMPDIR:-/tmp}/core-probes.XXXXXX")"
 trap 'rm -rf "$S"' EXIT;
@@ -80,8 +84,30 @@ load is REVIEW_MODEL conf-model && load is REVIEW_TIMEOUT 42 && noted 2 && [ ! -
 conf "REVIEW_MODEL=\"\$HOME\""
 load is REVIEW_MODEL claude-sonnet-5 && noted 1 && ok "a \$VAR reference is refused, not expanded" || bad "variable reference"
 
+# --- the legacy ${VAR:-default} form ---------------------------------------------
 conf 'REVIEW_MODEL="${REVIEW_MODEL:-conf-model}"'
-load is REVIEW_MODEL claude-sonnet-5 && noted 1 && ok "the old \${VAR:-default} format is reported and skipped" || bad "old format"
+load is REVIEW_MODEL conf-model && ok "legacy form is accepted with its literal" || bad "legacy literal (stderr: $(cat "$ERR"))"
+
+conf 'REVIEW_MODEL="${REVIEW_MODEL:-conf-model}"' 'REVIEW_TIMEOUT=${REVIEW_TIMEOUT:-42}' 'REVIEW_SOURCE_DIRS="${REVIEW_SOURCE_DIRS:-src lib}"'
+load is REVIEW_TIMEOUT 42 && load is REVIEW_SOURCE_DIRS "src lib" \
+	&& [ "$(grep -c 'uses the legacy' "$ERR")" -eq 1 ] && ! noted 1 \
+	&& ok "legacy note is printed once per file, however many lines use the form" || bad "legacy note count (stderr: $(cat "$ERR"))"
+
+conf 'REVIEW_MODEL="${REVIEW_MODEL:-conf-model}"'
+REVIEW_MODEL=env-model load is REVIEW_MODEL env-model && ok "the environment still beats a legacy line" || bad "legacy vs environment"
+
+conf 'REVIEW_LINT_CMD="${REVIEW_LINT_CMD:-$(touch '"$SENTINEL"')}"'
+load is REVIEW_LINT_CMD "" && noted 1 && [ ! -e "$SENTINEL" ] && ! grep -q 'uses the legacy' "$ERR" \
+	&& ok "legacy form with a nested \$(...) is refused and runs nothing" || bad "legacy nested substitution (stderr: $(cat "$ERR"))"
+
+conf 'REVIEW_MODEL="${REVIEW_TIMEOUT:-conf-model}"'
+load is REVIEW_MODEL claude-sonnet-5 && noted 1 && ok "legacy form naming a different key is refused" || bad "legacy mismatched key"
+
+conf 'REVIEW_MODEL="${REVIEW_MODEL:-a`id`}"'
+load is REVIEW_MODEL claude-sonnet-5 && noted 1 && ok "legacy form with a backtick literal is refused" || bad "legacy backtick"
+
+conf 'REVIEW_MODEL=conf-model'
+load true; quiet && ok "the plain form prints no legacy note" || bad "plain form noted"
 
 conf 'REVIEW_MODEL=a; touch '"$SENTINEL"
 load is REVIEW_MODEL "a; touch $SENTINEL" && [ ! -e "$SENTINEL" ] \
@@ -95,6 +121,9 @@ load is REVIEW_MODEL "conf-model REVIEW_TIMEOUT=42" && load is REVIEW_TIMEOUT 18
 conf 'BOGUS=1' 'REVIEW_MODEL=conf-model'
 load is BOGUS "<unset>" && load is REVIEW_MODEL conf-model && noted 1 && ! noted 2 \
 	&& ok "an unknown key is ignored and reported; the known one still loads" || bad "unknown key (stderr: $(cat "$ERR"))"
+
+conf 'REVIEW_MAX_CHUNKS=6'
+load is REVIEW_MAX_CHUNKS "<unset>" && noted 1 && ok "a key that later changes will consume is not accepted yet" || bad "not-yet-accepted key"
 
 conf 'PATH=/nowhere'
 load is PATH "$PATH" && noted 1 && ok "PATH cannot be set from the file" || bad "PATH from file"
@@ -139,6 +168,16 @@ grep -qx "\[review\] note: review.conf line 3 ignored: $(printf 'x%.0s' $(seq 1 
 
 unlink "$CONF"
 load is REVIEW_MODEL claude-sonnet-5 && quiet && ok "a missing review.conf is silent and leaves the defaults" || bad "missing file"
+
+# --- the suite does not inherit the caller's environment ---------------------
+# Run a nested copy with junk exported; it must pass exactly as this one did.
+if [ -z "${CORE_PROBES_NESTED:-}" ]; then
+	if CORE_PROBES_NESTED=1 REVIEW_MODEL=junk-model REVIEW_TIMEOUT=1 REVIEW_SOURCE_DIRS=junk bash "$0" >"$S/nested.log" 2>&1; then
+		ok "the suite passes with REVIEW_MODEL and friends exported to junk"
+	else
+		bad "suite inherits the caller's environment ($(tail -3 "$S/nested.log" | tr '\n' ' '))"
+	fi
+fi
 
 echo
 echo "core-probes: $checks checks, $fail failure(s)"
