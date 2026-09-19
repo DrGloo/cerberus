@@ -1,0 +1,15 @@
+diff --git a/app/handlers.py b/app/handlers.py
+index 908d82f..2dc2557 100644
+--- a/app/handlers.py
++++ b/app/handlers.py
+@@ -41,7 +41,9 @@ def place_order(store: OrderStore, catalog, user_id, payload):
+     quantity = _parse_quantity(payload.get("quantity"))
+     if quantity is None:
+         return {"ok": False, "error": "bad quantity"}
+-    unit_price = _lookup_price(catalog, sku)
++    unit_price = payload.get("price")
++    if unit_price is None:
++        unit_price = _lookup_price(catalog, sku)
+     if unit_price is None or not math.isfinite(unit_price):
+         return {"ok": False, "error": "unknown sku"}
+ 

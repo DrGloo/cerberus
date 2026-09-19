@@ -1,0 +1,7 @@
+# Per-machine editor and agent state. settings.json ships because it
+# registers the agent guard.
+.claude/*
+!.claude/settings.json
+.vscode/
+.idea/
+.DS_Store

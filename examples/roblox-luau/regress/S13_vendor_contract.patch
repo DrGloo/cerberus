@@ -1,0 +1,16 @@
+diff --git a/src/shared/vendor/GoodSignal.lua b/src/shared/vendor/GoodSignal.lua
+index 0553ee8..1564dc9 100644
+--- a/src/shared/vendor/GoodSignal.lua
++++ b/src/shared/vendor/GoodSignal.lua
+@@ -86,11 +86,6 @@ function Connection:Disconnect()
+ 	end
+ end
+ 
+--- Alias so Connection instances satisfy the duck-typed `Destroy` cleanup
+--- contract used by Maid (and by Roblox instances generally). Must be assigned
+--- before the strict metatable below, which rejects new keys.
+-Connection.Destroy = Connection.Disconnect
+-
+ -- Make Connection strict
+ setmetatable(Connection, {
+ 	__index = function(tb, key)

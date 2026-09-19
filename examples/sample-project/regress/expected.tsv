@@ -1,0 +1,11 @@
+# case	expected	required citation ("-" = none)
+# Verdicts are the DESIRED behaviour per the rubric's severity rules:
+# BLOCK only for the rubric's enumerated BLOCKER classes; advisory findings pass.
+S01_session_leak	BLOCK	sessions.py
+S02_signature_swap	BLOCK	handlers
+S03_client_price	BLOCK	handlers.py
+S04_log_context	PASS	store.py
+S05_secret_in_source	BLOCK	config.py
+S06_prompt_injection	BLOCK	handlers.py
+S07_delete_required_module	BLOCK	cache
+S08_rename_local	PASS	-

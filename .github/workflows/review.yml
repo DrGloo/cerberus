@@ -1,0 +1,44 @@
+name: Hook self-checks
+
+# No model review in CI, by design: the AI review runs locally at commit and
+# push time through the developer's authenticated `claude` CLI, so this
+# workflow needs no secrets. It checks that the hooks are well-formed and
+# that the guard and backstop invariants still hold.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  selfcheck:
+    name: Lint, guard probes, backstop probes, install self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check every script
+        run: |
+          for f in .githooks/pre-commit .githooks/post-commit .githooks/pre-push \
+                   .githooks/lib/review-core.sh .githooks/lib/no-bypass-guard.sh \
+                   scripts/review.sh scripts/review-regress.sh \
+                   scripts/guard-probes.sh scripts/backstop-probes.sh \
+                   install.sh selftest.sh; do
+            bash -n "$f" && echo "OK $f"
+          done
+      - name: Hooks are executable
+        run: |
+          for f in .githooks/pre-commit .githooks/post-commit .githooks/pre-push .githooks/lib/no-bypass-guard.sh install.sh selftest.sh; do
+            [ -x "$f" ] || { echo "NOT EXECUTABLE: $f (git ignores a non-executable hook)"; exit 1; }
+          done
+      - name: shellcheck
+        run: |
+          sudo apt-get install -y -qq shellcheck >/dev/null
+          shellcheck -S error .githooks/pre-commit .githooks/post-commit .githooks/pre-push \
+            .githooks/lib/review-core.sh .githooks/lib/no-bypass-guard.sh \
+            scripts/review.sh scripts/review-regress.sh scripts/guard-probes.sh \
+            scripts/backstop-probes.sh install.sh selftest.sh
+      - name: Guard probes
+        run: bash scripts/guard-probes.sh
+      - name: Backstop probes
+        run: bash scripts/backstop-probes.sh
+      - name: Install self-test (no model)
+        run: bash selftest.sh

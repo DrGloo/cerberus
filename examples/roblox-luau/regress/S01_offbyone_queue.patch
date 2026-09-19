@@ -1,0 +1,15 @@
+diff --git a/src/server/services/ObservabilitySink.lua b/src/server/services/ObservabilitySink.lua
+index 51e27b9..a272b47 100644
+--- a/src/server/services/ObservabilitySink.lua
++++ b/src/server/services/ObservabilitySink.lua
+@@ -59,8 +59,8 @@ local function queueEvent(event)
+ 	tail += 1
+ 	queue[tail] = event
+ 
+-	-- Drop oldest on overflow.
+-	while queueSize() > MAX_QUEUE_SIZE do
++	-- Drop oldest on overflow, keeping one slot free so head never meets tail.
++	while queueSize() >= MAX_QUEUE_SIZE do
+ 		queue[head] = nil
+ 		head += 1
+ 	end

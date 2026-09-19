@@ -1,0 +1,15 @@
+diff --git a/src/server/progression/QuestManager.lua b/src/server/progression/QuestManager.lua
+index 6db20e7..5b6bbd4 100644
+--- a/src/server/progression/QuestManager.lua
++++ b/src/server/progression/QuestManager.lua
+@@ -524,7 +524,9 @@ end
+ -- Get active quests (enriched for client)
+ ---------------------------------------------------------------------------
+ function QuestManager:GetActiveQuests(player)
+-	return enrichActiveQuests(player, CYCLES.Daily, self.AssignQuests, self.CheckDailyRefresh)
++	local quests, timeLeft = enrichActiveQuests(player, CYCLES.Daily, self.AssignQuests, self.CheckDailyRefresh)
++	-- Single result table so callers can forward it to the client as-is.
++	return { quests = quests, timeLeft = timeLeft }
+ end
+ 
+ ---------------------------------------------------------------------------

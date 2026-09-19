@@ -1,0 +1,16 @@
+diff --git a/app/store.py b/app/store.py
+index 667ef6d..8a65618 100644
+--- a/app/store.py
++++ b/app/store.py
+@@ -32,10 +32,7 @@ class OrderStore:
+                 return True
+             except IOError as err:
+                 last_error = err
+-                log.warning(
+-                    "order save failed user=%s order=%s attempt=%s/%s: %s",
+-                    user_id, order["id"], attempt, MAX_ATTEMPTS, err,
+-                )
++                log.warning("order save failed: %s", err)
+                 time.sleep(RETRY_DELAY_SECONDS)
+         raise StoreUnavailable(f"order {order['id']} not saved") from last_error
+ 

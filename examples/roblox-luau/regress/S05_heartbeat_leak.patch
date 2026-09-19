@@ -1,0 +1,25 @@
+diff --git a/src/server/gameplay/SlideVfx.lua b/src/server/gameplay/SlideVfx.lua
+index f7f7d85..d796b78 100644
+--- a/src/server/gameplay/SlideVfx.lua
++++ b/src/server/gameplay/SlideVfx.lua
+@@ -7,6 +7,7 @@
+ -- per-frame UpdateTier + Animate calls.
+ 
+ local ReplicatedStorage = game:GetService("ReplicatedStorage")
++local RunService = game:GetService("RunService")
+ local TweenService = game:GetService("TweenService")
+ 
+ local Shared = ReplicatedStorage:WaitForChild("Shared", 10)
+@@ -343,6 +344,12 @@ local function applyTier2(handle)
+ 
+ 	if handle.vfxDisk then
+ 		handle.vfxDiskBaseSize = 10
++		local disk = handle.vfxDisk
++		local pulseStart = os.clock()
++		RunService.Heartbeat:Connect(function()
++			if not disk.Parent then return end
++			disk.Transparency = 0.4 + 0.2 * math.sin((os.clock() - pulseStart) * 4)
++		end)
+ 	end
+ end
+ 

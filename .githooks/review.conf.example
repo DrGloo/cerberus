@@ -1,0 +1,45 @@
+# review.conf — per-project settings for the review hooks.
+#
+# Copy this file to `review.conf` in the same directory and edit. It is plain
+# shell, sourced by lib/review-core.sh, so keep it to the assignments below.
+# Every value uses `${VAR:-default}` so an environment override on the command
+# line (`REVIEW_MODEL=... git commit`) still wins.
+
+# Model the reviewer runs with. The `claude` CLI is used when it is on PATH;
+# otherwise ANTHROPIC_API_KEY plus curl and python3 talk to the API directly.
+REVIEW_MODEL="${REVIEW_MODEL:-claude-sonnet-5}"
+
+# Directories git-grep searches for callers and dangling references when it
+# builds the prompt. "." is the whole tree. Narrow it on a repo with large
+# docs or fixtures so the reviewer is not shown matches from prose.
+#   REVIEW_SOURCE_DIRS="src lib"
+REVIEW_SOURCE_DIRS="${REVIEW_SOURCE_DIRS:-.}"
+
+# Extra shell globs, space-separated, that are never worth a review pass. The
+# built-in list already skips lockfiles, binary assets, vendored trees and
+# generated code.
+#   REVIEW_EXTRA_IGNORE="docs/* *.snap fixtures/*"
+REVIEW_EXTRA_IGNORE="${REVIEW_EXTRA_IGNORE:-}"
+
+# A static check to run over the staged reviewable files before the model
+# sees them. Invoked from the repo root as `$REVIEW_LINT_CMD <file>...`; a
+# non-zero exit blocks the commit without a model call. Leave empty to skip.
+# Examples:
+#   REVIEW_LINT_CMD="selene --allow-warnings --quiet"          # Luau
+#   REVIEW_LINT_CMD="npx eslint --max-warnings=-1"             # JS/TS
+#   REVIEW_LINT_CMD="ruff check"                               # Python
+#   REVIEW_LINT_CMD="shellcheck -S error"                      # shell
+REVIEW_LINT_CMD="${REVIEW_LINT_CMD:-}"
+
+# Timeouts, in seconds. The base covers the first REVIEW_TIMEOUT_STEP_BYTES
+# of prompt; every further step adds REVIEW_TIMEOUT_STEP_SECS, capped at
+# REVIEW_TIMEOUT_MAX. A timeout fails open (the commit goes through, is
+# ledgered, and is re-reviewed at push), so err on the generous side.
+REVIEW_TIMEOUT="${REVIEW_TIMEOUT:-180}"
+REVIEW_TIMEOUT_MAX="${REVIEW_TIMEOUT_MAX:-600}"
+
+# Changed lines in one file before its full current text is attached to the
+# prompt as context, and the byte budgets for the diff and those attachments.
+REVIEW_CONTEXT_THRESHOLD="${REVIEW_CONTEXT_THRESHOLD:-30}"
+REVIEW_MAX_DIFF_BYTES="${REVIEW_MAX_DIFF_BYTES:-200000}"
+REVIEW_MAX_CONTEXT_BYTES="${REVIEW_MAX_CONTEXT_BYTES:-60000}"

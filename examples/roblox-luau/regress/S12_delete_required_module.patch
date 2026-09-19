@@ -1,0 +1,23 @@
+diff --git a/src/shared/utils/TableUtils.lua b/src/shared/utils/TableUtils.lua
+deleted file mode 100644
+index 1c46d99..0000000
+--- a/src/shared/utils/TableUtils.lua
++++ /dev/null
+@@ -1,17 +0,0 @@
+-local TableUtils = {}
+-
+--- Recursively copies a table, including nested tables. Non-table values
+--- (numbers, strings, booleans, Instances, functions) are copied by reference.
+--- Use for cloning config/default-data tables that must not share mutable state.
+-function TableUtils.deepCopy(source)
+-	if type(source) ~= "table" then
+-		return source
+-	end
+-	local copy = {}
+-	for key, value in pairs(source) do
+-		copy[key] = TableUtils.deepCopy(value)
+-	end
+-	return copy
+-end
+-
+-return TableUtils

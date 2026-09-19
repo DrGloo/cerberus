@@ -1,0 +1,17 @@
+diff --git a/src/server/economy/PurchaseHandlers.lua b/src/server/economy/PurchaseHandlers.lua
+index ff49f43..82c9406 100644
+--- a/src/server/economy/PurchaseHandlers.lua
++++ b/src/server/economy/PurchaseHandlers.lua
+@@ -243,10 +243,8 @@ local function markLedgerGranted(playerId, purchaseId, productId)
+ end
+ 
+ local function backfillLedgerGranted(playerId, purchaseId, productId)
+-	local ok = markLedgerGranted(playerId, purchaseId, productId)
+-	if not ok then
+-		debugWarn("ProcessReceipt: ledger backfill failed for purchaseId " .. tostring(purchaseId))
+-	end
++	-- Best effort: the grant already committed, the ledger is only a mirror.
++	pcall(markLedgerGranted, playerId, purchaseId, productId)
+ end
+ 
+ ---------------------------------------------------------------------------

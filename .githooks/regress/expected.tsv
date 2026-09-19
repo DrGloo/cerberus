@@ -1,0 +1,10 @@
+# case	expected	required citation ("-" = none)
+#
+# One line per seeded-defect fixture in this directory: <case>.patch must
+# apply cleanly to HEAD. `expected` is the verdict the rubric SHOULD produce
+# (BLOCK only for the rubric's enumerated BLOCKER classes; advisory findings
+# pass). The citation is a literal substring that must appear in the review
+# output: for BLOCK cases anywhere, for PASS cases inside a [WARN] line.
+#
+# See examples/sample-project/regress for a small complete suite and
+# examples/roblox-luau/regress for a production one. Run scripts/review-regress.sh.

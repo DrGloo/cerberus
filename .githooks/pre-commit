@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Pre-commit review: SonarQube-style pass + senior-engineer review over the staged diff.
+# Standards live in .githooks/review-rubric.md. Exits 1 only on a BLOCKER finding.
+# A broken reviewer (timeout, network, API error) never blocks a commit — but
+# the commit is then unattested and pre-push re-reviews it before it leaves.
+# (Both bypasses below are caught again by pre-push; humans may push with
+# the hook disabled from their own terminal.)
+#
+# Bypass:   REVIEW_SKIP=1 git commit ...   or   git commit --no-verify
+# Tuning:   REVIEW_MODEL, REVIEW_TIMEOUT (s, default 180; grows with prompt size up to
+#           REVIEW_TIMEOUT_MAX, default 600), REVIEW_CONTEXT_THRESHOLD (default 30)
+set -u
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+HOOK_DIR="$ROOT_DIR/.githooks"
+GENERIC_RUBRIC="$HOOK_DIR/review-rubric.md"
+CACHE_DIR="$(git rev-parse --git-dir)/review-cache"
+LEDGER="$CACHE_DIR/fail-open.log"
+BRANCH="$(git symbolic-ref --short -q HEAD || echo detached)"
+
+# shellcheck source=lib/review-core.sh
+. "$HOOK_DIR/lib/review-core.sh"
+
+# Every commit that escapes review is ledgered (timestamp, branch, reason,
+# diff hash); pre-push re-reviews branches with entries. Capped at the newest
+# 200 lines so a clone that never pushes cannot grow it forever. Note that
+# `git commit --no-verify` never runs this hook at all, so it cannot be
+# ledgered — the CI review is its only net.
+ledger_append() {
+	mkdir -p "$CACHE_DIR"
+	printf '%s\t%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$BRANCH" "$1" "${DIFF_HASH:--}" >>"$LEDGER"
+	if [ "$(wc -l <"$LEDGER" | tr -d ' ')" -gt 200 ]; then
+		# $$-suffixed tmp: a concurrent writer must not clobber the same path.
+		tail -n 200 "$LEDGER" >"$LEDGER.tmp.$$" && mv "$LEDGER.tmp.$$" "$LEDGER"
+	fi
+}
+
+# Attestation handshake (supersedes the "only net" note above): on PASS this
+# hook writes the index tree id to `pending-attest`; post-commit checks the
+# new commit's tree against it and records the commit as reviewed (see
+# review_attest in review-core.sh). pre-push then re-reviews any outgoing
+# commit with no record — including ones made with hooks disabled, via
+# `git am`, or by a conflict-resolved rebase, none of which run this hook.
+PENDING="$CACHE_DIR/pending-attest"
+rm -f "$PENDING"
+
+# The staged tree is what the commit will contain; post-commit compares it to
+# HEAD^{tree} so a stale pending file can never attest a different commit.
+mark_reviewed() {
+	mkdir -p "$CACHE_DIR"
+	git write-tree >"$PENDING" 2>/dev/null || rm -f "$PENDING"
+}
+
+warn_and_pass() {
+	ledger_append "$1"
+	echo "[review] WARNING: $1 — commit allowed without review (re-reviewed at push)."
+	exit 0
+}
+
+if [ "${REVIEW_SKIP:-0}" = "1" ]; then
+	ledger_append "review skipped via REVIEW_SKIP"
+	echo "[review] skipped (REVIEW_SKIP=1)"
+	exit 0
+fi
+
+[ -f "$GENERIC_RUBRIC" ] || warn_and_pass "rubric missing at $GENERIC_RUBRIC"
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/review.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+
+# The rubric the model sees is the generic one with the project's section
+# spliced in; it is hashed into the cache key below, so editing either file
+# invalidates cached verdicts.
+RUBRIC="$TMP/rubric.md"
+review_rubric_file "$HOOK_DIR" "$RUBRIC"
+
+git diff --cached --diff-filter=ACMR --name-only | review_filter_paths >"$TMP/paths"
+git diff --cached --diff-filter=D --name-only | review_filter_paths >"$TMP/deleted"
+if [ ! -s "$TMP/paths" ] && [ ! -s "$TMP/deleted" ]; then
+	echo "[review] nothing reviewable in the staged diff (lockfiles/assets/vendor only)."
+	mark_reviewed
+	exit 0
+fi
+
+# Only the reviewable files, so the model never sees vendored/asset noise.
+# Deletions ride along: removing a module that live code still requires is a
+# startup failure, and filtering to ACMR used to hide it from review entirely.
+paths=()
+while IFS= read -r p; do paths+=("$p"); done <"$TMP/paths"
+while IFS= read -r p; do paths+=("$p"); done <"$TMP/deleted"
+git diff --cached --unified=8 --diff-filter=ACMRD -- "${paths[@]}" >"$TMP/diff"
+[ -s "$TMP/diff" ] || { mark_reviewed; exit 0; }
+
+# Calibration check: the regress expectations are only known-good for the model
+# that last passed the full suite. Printed before the cache short-circuit so a
+# cached-PASS commit still surfaces the mismatch. Non-blocking — the review
+# proceeds; verdicts may just be calibrated for a different model.
+CALIBRATED_FILE="$HOOK_DIR/regress/calibrated-model"
+CALIBRATED="$(cat "$CALIBRATED_FILE" 2>/dev/null || echo none)"
+if [ "$CALIBRATED" != "$REVIEW_MODEL" ]; then
+	echo "[review] note: $REVIEW_MODEL is not the calibrated model ($CALIBRATED) — run scripts/review-regress.sh to recalibrate."
+fi
+
+# Cache by diff hash: amending after a clean review must not re-run.
+mkdir -p "$CACHE_DIR"
+DIFF_HASH="$( { cat "$TMP/diff" "$RUBRIC"; echo "$REVIEW_MODEL"; } | shasum -a 256 | cut -d' ' -f1)"
+CACHE_FILE="$CACHE_DIR/$DIFF_HASH"
+if [ -f "$CACHE_FILE" ]; then
+	if review_report "$CACHE_FILE"; then
+		echo "[review] PASS (cached for this exact diff)"
+		mark_reviewed
+		exit 0
+	fi
+	# A cached BLOCK falls through and re-reviews; the developer may have
+	# decided the finding is wrong, and a fresh opinion is cheap.
+fi
+# Keep the cache from growing forever: prune verdicts older than 14 days.
+# Only the hash-named verdict files — the ledger, the attestation log, and
+# last-review.md carry dots and must survive a quiet fortnight.
+find "$CACHE_DIR" -type f ! -name '*.*' -mtime +14 -delete 2>/dev/null || true
+
+# Static check before the model review: a project linter configured through
+# REVIEW_LINT_CMD in review.conf runs over the staged reviewable files (added,
+# copied, modified, renamed — never deleted ones). A non-zero exit blocks
+# without spending a model call: parse failures and undefined names are not
+# worth a reviewer's time. Empty REVIEW_LINT_CMD skips the step.
+if [ -n "$REVIEW_LINT_CMD" ] && [ -s "$TMP/paths" ]; then
+	LINT_FILES=()
+	while IFS= read -r p; do
+		[ -n "$p" ] && LINT_FILES+=("$p")
+	done <"$TMP/paths"
+	# shellcheck disable=SC2086
+	if ! (cd "$ROOT_DIR" && $REVIEW_LINT_CMD "${LINT_FILES[@]}"); then
+		echo "[review] BLOCK — the lint step (REVIEW_LINT_CMD) failed on staged files; fix them and re-commit."
+		exit 1
+	fi
+fi
+
+review_build_prompt "$TMP/diff" "$TMP/paths" "$TMP/deleted" "$RUBRIC" "staged diff" "git show :" "--cached" "$TMP/prompt"
+
+FILE_COUNT="$(cat "$TMP/paths" "$TMP/deleted" | grep -c .)"
+PROMPT_BYTES="$(wc -c <"$TMP/prompt" | tr -d ' ')"
+REVIEW_TIMEOUT="$(review_effective_timeout "$TMP/prompt")"
+echo "[review] reviewing $FILE_COUNT file(s) with $REVIEW_MODEL (prompt ${PROMPT_BYTES} bytes, timeout ${REVIEW_TIMEOUT}s)..."
+
+rc=0
+review_call_model "$TMP/prompt" "$TMP/out" || rc=$?
+case "$rc" in
+	0) ;;
+	124) warn_and_pass "reviewer timed out after ${REVIEW_TIMEOUT}s" ;;
+	3)
+		{
+			echo "# INVALID reviewer response (output contract violated) — $(date '+%Y-%m-%d %H:%M:%S')"
+			echo "# files: $(cat "$TMP/paths" "$TMP/deleted" | tr '\n' ' ')"
+			echo
+			cat "$TMP/out"
+		} >"$CACHE_DIR/last-review.md"
+		warn_and_pass "reviewer response violated the output contract — raw response saved to $CACHE_DIR/last-review.md"
+		;;
+	*)   warn_and_pass "reviewer unavailable or returned an invalid response (exit $rc)" ;;
+esac
+
+cp "$TMP/out" "$CACHE_FILE"
+# Always-readable copy of the most recent review (agents and humans can `cat` it after the commit).
+{
+	echo "# AI code review — $(date '+%Y-%m-%d %H:%M:%S')"
+	echo "# files: $(tr '\n' ' ' <"$TMP/paths")"
+	echo
+	cat "$TMP/out"
+} >"$CACHE_DIR/last-review.md"
+
+echo
+if review_report "$TMP/out"; then
+	echo "[review] PASS — findings above are advisory; full review: $CACHE_DIR/last-review.md"
+	mark_reviewed
+	exit 0
+fi
+
+cat <<MSG
+[review] BLOCK — at least one BLOCKER finding above.
+  Fix it and re-stage, or bypass if you disagree with the reviewer:
+    REVIEW_SKIP=1 git commit ...
+    git commit --no-verify
+MSG
+exit 1

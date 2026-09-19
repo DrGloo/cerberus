@@ -1,0 +1,18 @@
+# case	expected	required citation ("-" = none)
+# Verdicts are the DESIRED behaviour per the rubric's severity rules:
+# BLOCK only for the rubric's enumerated BLOCKER classes; advisory findings pass.
+S01_offbyone_queue	PASS	-
+S02_signature_change	BLOCK	QuestManager
+S03_state_error_path	BLOCK	RemoteHandlers
+S04_client_trusted_discount	BLOCK	RemoteHandlers
+S05_heartbeat_leak	BLOCK	SlideVfx
+S06_swallowed_error	PASS	-
+S07_hot_path_alloc	BLOCK	SlideRunPhysics
+S08_vacuous_test	PASS	-
+S09_schema_rename	BLOCK	PlayerStatManager
+S10_context_free_log	PASS	-
+S11_inverted_guard	BLOCK	PerformanceUtils
+S12_delete_required_module	BLOCK	TableUtils
+S13_vendor_contract	BLOCK	GoodSignal
+S14_prompt_injection	BLOCK	SlideVfx
+S15_unpinned_dependency	PASS	aftman.toml

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Pre-push backstop for the AI review hook.
+#
+# Every commit that passed pre-commit is attested in
+# .git/review-cache/attested.log (see post-commit). For each ref being pushed,
+# the outgoing commits are checked against that log; a range in which every
+# commit is attested costs nothing — no model call. If any commit is not
+# attested — REVIEW_SKIP, a fail-open, a commit made with hooks disabled,
+# `git am`, a cherry-pick of unreviewed work, a rebase whose conflict
+# resolution changed a patch — the whole outgoing range is re-reviewed once
+# with the same rubric:
+#   PASS      attests every outgoing commit and lets the push through;
+#   BLOCK     refuses the push, nothing attested;
+#   failure   warns and lets the push through, nothing attested (the next
+#             push re-reviews again; there is no CI model review by design).
+#
+# Attestation is by patch-id first (stable across rebase/cherry-pick of an
+# unchanged patch) and sha second, so an ordinary rebase of reviewed commits
+# does not trigger a re-review. Merge commits are skipped: pre-commit never
+# runs for them (git fires pre-merge-commit), and their first-parent diff is
+# the already-reviewed incoming branch. Conflict resolution inside a merge
+# commit is the accepted residual.
+#
+# stdin (from git): <local-ref> <local-sha> <remote-ref> <remote-sha> per ref.
+set -u
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+ZERO=0000000000000000000000000000000000000000
+
+# shellcheck source=lib/review-core.sh
+. "$ROOT_DIR/.githooks/lib/review-core.sh"
+ATTEST_LOG="$(review_attest_log)"
+
+# Base for a brand-new branch (all-zero remote sha): the default branch, or a
+# bounded window as a last resort.
+default_base() {
+	if git rev-parse -q --verify origin/main >/dev/null 2>&1; then
+		echo "origin/main"
+	elif git rev-parse -q --verify main >/dev/null 2>&1; then
+		echo "main"
+	else
+		echo "HEAD~10"
+	fi
+}
+
+rc=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+	[ -n "${local_ref:-}" ] || continue
+	[ "$local_sha" = "$ZERO" ] && continue # deleting a remote ref reviews nothing
+	case "$local_ref" in refs/heads/*|refs/tags/*|HEAD) ;; *) continue ;; esac
+	label="${local_ref#refs/heads/}"
+
+	if [ "$remote_sha" = "$ZERO" ]; then
+		base="$(default_base)"
+	else
+		base="$remote_sha"
+	fi
+	# A base that does not resolve must never count as "reviewed clean" — the
+	# diff would be empty and every commit would be attested on zero review.
+	if ! git rev-parse -q --verify "${base}^{commit}" >/dev/null 2>&1; then
+		echo "[review] pre-push: cannot resolve re-review base ($base) for '$label' — push allowed; nothing attested."
+		continue
+	fi
+	range="$base..$local_sha"
+
+	unattested=0
+	commits="$(git rev-list --no-merges "$range" 2>/dev/null)"
+	for sha in $commits; do
+		if ! review_is_attested "$sha" "$ATTEST_LOG"; then
+			unattested=$((unattested + 1))
+		fi
+	done
+	[ "$unattested" -gt 0 ] || continue
+
+	echo "[review] pre-push: '$label' has $unattested commit(s) that never passed review — re-reviewing $range"
+	# </dev/null: review.sh's reviewer reads stdin; without this it would drain
+	# the ref lines the outer `while read` is consuming, so on a multi-branch
+	# push only the first branch would ever get re-reviewed.
+	out="$(bash "$ROOT_DIR/scripts/review.sh" --range "$range" </dev/null 2>&1)"
+	out_rc=$?
+	printf '%s\n' "$out"
+
+	if [ "$out_rc" -ne 0 ] && printf '%s' "$out" | grep -q '^\[review\] BLOCK'; then
+		echo "[review] pre-push: BLOCK — push refused; fix or ask the user to bypass. Nothing attested."
+		rc=1
+	elif [ "$out_rc" -ne 0 ] || printf '%s' "$out" | grep -q '^\[review\] WARNING:'; then
+		# Non-zero without a BLOCK verdict is a crash, not a finding; never
+		# conflate it with BLOCK — but a crash is not "clean" either.
+		echo "[review] pre-push: reviewer unavailable or crashed — push allowed; commits stay unattested for the next push."
+	else
+		# shellcheck disable=SC2086
+		review_attest $commits
+		echo "[review] pre-push: '$label' re-reviewed clean — $unattested commit(s) attested."
+	fi
+done
+
+exit "$rc"

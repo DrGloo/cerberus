@@ -1,0 +1,27 @@
+diff --git a/src/server/gameplay/SlideRunPhysics.lua b/src/server/gameplay/SlideRunPhysics.lua
+index 1519287..087142b 100644
+--- a/src/server/gameplay/SlideRunPhysics.lua
++++ b/src/server/gameplay/SlideRunPhysics.lua
+@@ -2,6 +2,7 @@
+ -- Ramp and coast phase simulation for slide runs. Extracted from SlideController
+ -- to keep the coordinator thin and make frame logic testable in isolation.
+ 
++local Players = game:GetService("Players")
+ local RunService = game:GetService("RunService")
+ 
+ local SlideRunPhysics = {}
+@@ -238,6 +239,14 @@ function SlideRunPhysics.runCoastPhase(params)
+ 
+ 		local cf = slideCFrame(frame.position, slideDir, frame.yaw)
+ 		ring:PivotTo(cf)
++
++		-- Keep the spectator distance label fresh.
++		local label = string.format("%s: %d m", tostring(runState.playerName), math.floor(frame.distance or 0))
++		for _, other in ipairs(Players:GetPlayers()) do
++			if other.Character then
++				other:SetAttribute("SpectatingDistance_" .. tostring(runState.runId), label)
++			end
++		end
+ 		movePlayerToRing(character, cf)
+ 
+ 		powerUpManager.CheckCollection(runState, frame.position, frame.distAlongSlide)

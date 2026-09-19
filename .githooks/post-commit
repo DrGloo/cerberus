@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Post-commit half of the attestation handshake (see pre-commit).
+#
+# pre-commit cannot know the sha of a commit that does not exist yet, so on a
+# PASS it leaves the staged tree id in `pending-attest`. This hook runs once
+# the commit exists: if HEAD's tree matches, the commit is recorded as
+# reviewed (by patch-id and sha) and pre-push will not re-review it. A commit
+# made with hooks disabled, via `git am`, or via `git cherry-pick` never wrote
+# a pending file, so it stays unattested and meets the reviewer at push time.
+#
+# The tree comparison is what makes a stale pending file harmless: a review
+# that passed but whose commit was then aborted leaves a pending tree that
+# matches no later commit. `--amend` is fine — the amended commit's tree is
+# exactly the index tree pre-commit saw.
+set -u
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+CACHE_DIR="$(git rev-parse --git-dir)/review-cache"
+PENDING="$CACHE_DIR/pending-attest"
+
+# shellcheck source=lib/review-core.sh
+. "$ROOT_DIR/.githooks/lib/review-core.sh"
+
+[ -f "$PENDING" ] || exit 0
+pending_tree="$(cat "$PENDING" 2>/dev/null)"
+unlink "$PENDING" 2>/dev/null
+
+head_tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" || exit 0
+[ -n "$pending_tree" ] && [ "$pending_tree" = "$head_tree" ] || exit 0
+
+review_attest HEAD
+exit 0

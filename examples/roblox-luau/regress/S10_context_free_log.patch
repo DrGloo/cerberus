@@ -1,0 +1,16 @@
+diff --git a/src/server/progression/PlayerStatManager.lua b/src/server/progression/PlayerStatManager.lua
+index 9fe5c9f..75b3ad6 100644
+--- a/src/server/progression/PlayerStatManager.lua
++++ b/src/server/progression/PlayerStatManager.lua
+@@ -842,9 +842,9 @@ local function autosave()
+ 					sessionData[player] = nil
+ 					lookupCache[player] = nil
+ 				elseif data ~= false then
+-					local ok, err = savePlayerData(player)
++					local ok = savePlayerData(player)
+ 					if not ok then
+-						debugWarn("Autosave failed for " .. tostring(player) .. ": " .. tostring(err))
++						debugWarn("Autosave failed")
+ 					end
+ 				end
+ 			end

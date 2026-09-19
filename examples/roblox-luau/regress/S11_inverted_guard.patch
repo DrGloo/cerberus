@@ -1,0 +1,15 @@
+diff --git a/src/shared/utils/PerformanceUtils.lua b/src/shared/utils/PerformanceUtils.lua
+index 604d9d9..c9a0010 100644
+--- a/src/shared/utils/PerformanceUtils.lua
++++ b/src/shared/utils/PerformanceUtils.lua
+@@ -34,8 +34,8 @@ Players.PlayerAdded:Connect(invalidateCache)
+ function PerformanceUtils.getPlayers()
+ 	local currentTime = os.clock()
+ 	
+-	-- Refresh cache if needed
+-	if isDirty or currentTime - lastPlayerListUpdate >= Constants.PERFORMANCE.PLAYER_LIST_CACHE_INTERVAL then
++	-- Refresh at most once per interval, even under join/leave churn.
++	if isDirty and currentTime - lastPlayerListUpdate >= Constants.PERFORMANCE.PLAYER_LIST_CACHE_INTERVAL then
+ 		cachedPlayers = Players:GetPlayers()
+ 		lastPlayerListUpdate = currentTime
+ 		isDirty = false

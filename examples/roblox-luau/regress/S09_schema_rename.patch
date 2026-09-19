@@ -1,0 +1,13 @@
+diff --git a/src/server/progression/PlayerStatManager.lua b/src/server/progression/PlayerStatManager.lua
+index 9fe5c9f..4710187 100644
+--- a/src/server/progression/PlayerStatManager.lua
++++ b/src/server/progression/PlayerStatManager.lua
+@@ -203,7 +203,7 @@ local DEFAULT_DATA = {
+ 	ProcessedReceiptIds  = {},
+ 
+ 	-- Power-up statistics
+-	PowerUpsCollected         = 0,    -- lifetime total
++	PowerUpsCollectedTotal    = 0,    -- lifetime total
+ 	PowerUpsByType            = {},   -- [typeId] = count, lazy-initialized
+ 	NextRunGuaranteedPowerups = false, -- consumed once on next slide run
+ 

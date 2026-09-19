@@ -1,0 +1,13 @@
+diff --git a/app/sessions.py b/app/sessions.py
+index f833513..b2614b3 100644
+--- a/app/sessions.py
++++ b/app/sessions.py
+@@ -20,7 +20,7 @@ class SessionRegistry:
+         }
+ 
+     def on_disconnect(self, user_id):
+-        session = self._by_user.pop(user_id, None)
++        session = self._by_user.get(user_id)
+         if session is not None:
+             session["transport"].close()
+ 

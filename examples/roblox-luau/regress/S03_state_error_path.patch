@@ -1,0 +1,33 @@
+diff --git a/src/server/remotes/RemoteHandlers.lua b/src/server/remotes/RemoteHandlers.lua
+index f4699c4..b12b0c4 100644
+--- a/src/server/remotes/RemoteHandlers.lua
++++ b/src/server/remotes/RemoteHandlers.lua
+@@ -22,6 +22,9 @@ local debugWarn = Constants.debugWarn
+ 
+ local MAX_STR = Constants.VALIDATION.MAX_STRING_INPUT_LENGTH
+ 
++-- Players with a daily-reward claim in flight; blocks double-claims across the DataStore yield.
++local pendingDailyClaims = {}
++
+ -- Explicit allowlist of data fields safe to return to the client.
+ local CLIENT_DATA_ALLOWLIST = {
+ 	Money = true,
+@@ -189,10 +192,16 @@ local function buildRemoteSpecs(questUpdate)
+ 		{
+ 			name = "ClaimDailyReward",
+ 			handler = function(player)
++				if pendingDailyClaims[player] then
++					return { success = false, message = "Claim already in progress." }
++				end
++				pendingDailyClaims[player] = true
+ 				local claimResult = DailyRewardManager:ClaimReward(player)
+-				if claimResult and claimResult.success then
+-					fireHudUpdate(player)
++				if not claimResult or not claimResult.success then
++					return claimResult
+ 				end
++				pendingDailyClaims[player] = nil
++				fireHudUpdate(player)
+ 				return claimResult
+ 			end,
+ 		},

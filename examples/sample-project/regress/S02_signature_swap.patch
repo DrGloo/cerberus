@@ -1,0 +1,13 @@
+diff --git a/app/store.py b/app/store.py
+index 667ef6d..bb7578b 100644
+--- a/app/store.py
++++ b/app/store.py
+@@ -22,7 +22,7 @@ class OrderStore:
+     def __init__(self, backend):
+         self._backend = backend
+ 
+-    def save(self, user_id, order):
++    def save(self, order, user_id):
+         if not isinstance(user_id, int):
+             raise TypeError("user_id must be an int")
+         last_error = None

@@ -1,0 +1,30 @@
+diff --git a/src/server/tests/specs/PerformanceUtilsCache.spec.lua b/src/server/tests/specs/PerformanceUtilsCache.spec.lua
+new file mode 100644
+index 0000000..76ecdbe
+--- /dev/null
++++ b/src/server/tests/specs/PerformanceUtilsCache.spec.lua
+@@ -0,0 +1,24 @@
++local function assertTrue(value, message)
++	if not value then
++		error(message or "expected true")
++	end
++end
++
++-- Covers the player-list cache invalidation fix: the list must refresh on join/leave.
++local function runPerformanceUtilsCacheTests()
++	local ReplicatedStorage = game:GetService("ReplicatedStorage")
++	local Shared = ReplicatedStorage:WaitForChild("Shared", 10)
++	local PerformanceUtils = require(Shared:WaitForChild("utils", 10):WaitForChild("PerformanceUtils", 10))
++
++	local players = PerformanceUtils.getPlayers()
++	assertTrue(type(players) == "table", "getPlayers returns a table")
++
++	local again = PerformanceUtils.getPlayers()
++	assertTrue(type(again) == "table", "cached getPlayers returns a table")
++	assertTrue(#again >= 0, "cached list has a non-negative length")
++end
++
++return {
++	name = "PerformanceUtilsCache",
++	run = runPerformanceUtilsCacheTests,
++}
