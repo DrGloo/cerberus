@@ -1,4 +1,8 @@
-# ai-review-hooks
+# Cerberus
+
+Three heads on the gate. One reads every staged diff before it becomes a
+commit. One remembers what it has already let through. One stops anything at
+the push that never passed the first two.
 
 An AI code review that runs where it can actually stop a bad change: in the
 git hooks on the developer's machine. Every staged diff is reviewed by a
@@ -14,9 +18,9 @@ by what went wrong in practice.
 
 ```
 .githooks/
-  pre-commit                  reviews the staged diff; exit 1 only on a BLOCKER
-  post-commit                 attests the commit the review just passed
-  pre-push                    re-reviews any outgoing commit that was never attested
+  pre-commit                  head one: reviews the staged diff; exit 1 only on a BLOCKER
+  post-commit                 head two: attests the commit the review just passed
+  pre-push                    head three: re-reviews any outgoing commit that was never attested
   lib/review-core.sh          prompt assembly, model call, verdict contract, attestation
   lib/no-bypass-guard.sh      Claude Code PreToolUse hook: agents cannot bypass or tamper
   review-rubric.md            the generic rubric
@@ -41,8 +45,8 @@ optional. Runs on macOS and Linux with no other dependencies.
 ## Install
 
 ```
-git clone https://github.com/<you>/ai-review-hooks
-bash ai-review-hooks/install.sh /path/to/your/repo
+git clone https://github.com/<you>/cerberus
+bash cerberus/install.sh /path/to/your/repo
 ```
 
 That copies the hook directory and the scripts, sets `core.hooksPath` for that

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh <target-repo> [--force]
 #
-# Installs the review hooks into another repository:
+# Installs Cerberus, the review hooks, into another repository:
 #   .githooks/            the three hooks, the shared library, the agent guard,
 #                         the generic rubric, a config example, and an empty
 #                         regress suite
@@ -86,7 +86,7 @@ fi
 git -C "$DST" config core.hooksPath .githooks   # the documented enable step; once per clone
 
 cat <<MSG
-installed into $DST
+Cerberus installed into $DST
   hooks:    $HOOKS/  (core.hooksPath set)
   scripts:  $SCRIPTS/review.sh review-regress.sh guard-probes.sh backstop-probes.sh
   agent:    $guard_note
