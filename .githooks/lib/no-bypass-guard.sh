@@ -4,21 +4,37 @@
 # agents cannot.
 #
 # Layers:
-#   1. The command string is checked against bypass + tamper patterns.
+#   1. A Bash command string is checked against bypass + tamper patterns and
+#      against the protected-path rule: a protected path (hook tree, guard
+#      registration, review and probe scripts, anything under a git directory)
+#      as the target of an output redirect, or in the same simple command as a
+#      write-shaped word, is refused. Reads stay allowed. Any command naming
+#      the attestation key (<git-common-dir>/review-cache/key) is refused.
 #   2. Script files the command invokes (bash|sh|zsh <path>, ./<path>) are
 #      scanned with the bypass patterns too — up to 3 regular files, first
 #      64KB each — so a wrapper hiding `git commit --no-verify` is caught at
-#      invocation. Tamper patterns are NOT applied to file contents (tracked
-#      tooling like review-regress.sh legitimately copies .githooks into
-#      worktrees), and the test-corpus scripts (scripts/guard-probes.sh,
-#      scripts/backstop-probes.sh) are exempt — their content is trigger
-#      strings by design. Overwriting an exempt file to smuggle a bypass is
-#      part of the accepted residual surface below.
+#      invocation. Tamper and protected-path rules are NOT applied to file
+#      contents (tracked tooling like review-regress.sh legitimately copies
+#      .githooks into worktrees), and the test-corpus scripts
+#      (scripts/guard-probes.sh, scripts/backstop-probes.sh) are exempt —
+#      their content is trigger strings by design. Overwriting an exempt file
+#      is a protected-path write and is refused on its own.
+#   3. File-tool payloads (Write/Edit/MultiEdit/NotebookEdit carry a path, no
+#      command) are judged by their path alone: a protected path is refused
+#      whatever the content says; any other path is allowed whatever the
+#      content says. Content is never scanned as if it were a shell command,
+#      so documentation that quotes a bypass flag is writable.
 #
 # Accepted residual holes (a static shell inspector cannot close these; the
 # guard raises the cost of a bypass, it cannot make one impossible):
-#   - a file written by a non-Bash tool in the same turn it is invoked;
-#   - a script piped rather than named: `cat w.sh | bash`, `bash < w.sh`;
+#   - a script written by a non-Bash tool and executed in the same turn;
+#   - a program piped rather than named, to a shell or an interpreter on
+#     stdin: `cat w.sh | bash`, `bash < w.sh`, `python3 < w.py`;
+#   - a protected path reached through a symlink the guard has not seen (the
+#     path predicate is textual: `./` and `..` are folded, links are not);
+#   - the attestation key read through a path the guard does not recognise
+#     (a directory-recursive reader over the cache directory, a variable that
+#     expands to the key path at run time);
 #   - a `cd other/ && ./w.sh` where w.sh is not at that path from the repo root;
 #   - a ./script after a command-prefix word not in the command-position list;
 #   - >64KB of leading padding before the bypass line in a scanned file;
@@ -34,21 +50,25 @@ set -u
 input=""
 IFS= read -r -d '' input
 
+have_jq=0
+command -v jq >/dev/null 2>&1 && have_jq=1
+
 cmd=""
-if command -v jq >/dev/null 2>&1; then
+if [ "$have_jq" = 1 ]; then
 	cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)" || cmd=""
 fi
-[ -n "$cmd" ] || cmd="$input"
 
-# The file-editing tools carry a path instead of a command. A write aimed at
-# the hook tree is a tamper whatever its content says, so the path is checked
-# on its own below. Without jq the path is cut out of the raw JSON.
+# The file-editing tools carry a path instead of a command (MultiEdit: the
+# top-level file_path; NotebookEdit: notebook_path). Such a payload is judged
+# by its path alone. Without jq the path is cut out of the raw JSON — but only
+# when the payload has no "command" key, so a Bash command that merely quotes
+# the string "file_path" stays in command mode and keeps every check.
 fpath=""
-if command -v jq >/dev/null 2>&1; then
+if [ "$have_jq" = 1 ]; then
 	fpath="$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' 2>/dev/null)" || fpath=""
-fi
-if [ -z "$fpath" ]; then
+else
 	case "$input" in
+		*'"command"'*) ;;
 		*'"file_path"'*)
 			fpath="${input#*\"file_path\"}"
 			fpath="${fpath#*\"}"
@@ -61,6 +81,11 @@ if [ -z "$fpath" ]; then
 			;;
 	esac
 fi
+
+mode="command"
+[ -z "$cmd" ] && [ -n "$fpath" ] && mode="file"
+# No command and no path: scan the raw payload as if it were a command.
+[ -n "$cmd" ] || cmd="$input"
 
 WHERE=""
 block() {
@@ -80,6 +105,150 @@ ci() {
 	return "$r"
 }
 cs() { [[ "$hay" =~ $1 ]]; }
+
+# --- protected paths ---------------------------------------------------------
+# One predicate decides what the agent may not write. Normalisation is textual
+# only — empty, `.` and `..` segments are folded, nothing is resolved on disk —
+# so a symlink to a protected file is a stated residual, not a surprise.
+# Case-insensitive: on a case-insensitive filesystem a differently spelled
+# path reaches the same file. Relative and absolute spellings both match.
+np=""
+normalize_path() {
+	local p="$1" seg out="" abs=""
+	case "$p" in /*) abs="/" ;; esac
+	local IFS='/'
+	set -f
+	for seg in $p; do
+		case "$seg" in
+			''|.) ;;
+			..)
+				case "$out" in
+					''|..|*/..) out="${out:+$out/}.." ;;
+					*/*) out="${out%/*}" ;;
+					*) out="" ;;
+				esac
+				;;
+			*) out="${out:+$out/}$seg" ;;
+		esac
+	done
+	set +f
+	np="$abs$out"
+}
+
+# Protected: the hook tree, the guard registration, the review and probe
+# scripts and their library, and everything under a git directory — the
+# attestation log and verdict cache live there, and a linked worktree's git
+# directory is under <main>/.git/worktrees/.
+is_protected_path() {
+	local r=1
+	# Cheap prefilter: the guard runs this per token of every Bash command,
+	# and normalisation only drops segments, so a protected spelling always
+	# contains one of these substrings before and after folding.
+	shopt -s nocasematch
+	case "$1" in
+		*.git*|*settings.json*|*scripts*) ;;
+		*) shopt -u nocasematch; return 1 ;;
+	esac
+	normalize_path "$1"
+	case "$np" in
+		.githooks|*/.githooks|.githooks/*|*/.githooks/*) r=0 ;;
+		.git|*/.git|.git/*|*/.git/*) r=0 ;;
+		.claude/settings.json|*/.claude/settings.json) r=0 ;;
+		scripts/review.sh|*/scripts/review.sh) r=0 ;;
+		scripts/review-regress.sh|*/scripts/review-regress.sh) r=0 ;;
+		scripts/guard-probes.sh|*/scripts/guard-probes.sh) r=0 ;;
+		scripts/backstop-probes.sh|*/scripts/backstop-probes.sh) r=0 ;;
+		scripts/core-probes.sh|*/scripts/core-probes.sh) r=0 ;;
+		scripts/lib|*/scripts/lib|scripts/lib/*|*/scripts/lib/*) r=0 ;;
+	esac
+	shopt -u nocasematch
+	return "$r"
+}
+
+# --- protected paths: the attestation key ------------------------------------
+# The per-clone secret lives at <git-common-dir>/review-cache/key. Nothing an
+# agent does needs it, so naming it at all (read, copy, write, any prefix) is
+# refused, as is a glob under the cache directory that could expand to it.
+# Applied to the command string or the file-tool path only, never to invoked
+# script contents: the hooks and review scripts legitimately read the key.
+check_key_path() {
+	hay="$1"
+	ci 'review-cache/+key([^a-z0-9_-]|$)' && block "the attestation key under review-cache is not readable or writable by agents."
+	ci 'review-cache/+[^[:space:]"'"'"';|&]*[*?[]' && block "globbing under review-cache could reach the attestation key."
+	return 0
+}
+
+# --- protected paths: write shapes in a Bash command -------------------------
+# The command is split into tokens on whitespace and on redirect, control and
+# grouping characters, quotes, commas and '='. A token rule, not a shell
+# grammar: a quoted '>' still counts as a redirect (a false refusal on
+# `grep '>' hook`, never a missed write), and a protected path inside a quoted
+# interpreter program still surfaces as its own token. Tokens are grouped into
+# simple commands at ';', '|', '&' and newlines; parentheses do not split, so
+# a $(...) or a subshell shares its enclosing command's verdict.
+#
+# Refused: a protected token as the target of '>', '>>', '>|' (or '>&'); a
+# write-shaped word in the same simple command as a protected token; sed with
+# an in-place flag, or an interpreter with an inline program (-c/-e), in the
+# same simple command as a protected token (coarse by design: a read-only
+# one-liner naming a hook is refused too). Plain reads pass.
+#
+# A write-shaped word counts wherever it sits in the simple command, even as
+# data (`grep tee hook` is refused; `grep 'te[e]' hook` is not). Deciding
+# command position would mean parsing every wrapper's options (`sudo -u me
+# tee`, `timeout 5 tee`, `xargs -I{} tee`), and a wrong guess there is a
+# missed write; a wrong guess here is a rephrased read.
+check_protected_writes() {
+	local norm="$cmd" c t
+	local redir=0 prot="" write="" sedw="" sedi="" interp="" inline=""
+	local toks=()
+	# Nothing to protect unless a protected spelling is present somewhere;
+	# the same substrings is_protected_path prefilters on. Keeps the common
+	# command free of the per-token walk.
+	hay="$cmd"
+	ci '\.git|scripts|settings\.json' || return 0
+	norm="${norm//$'\n'/ ; }"
+	norm="${norm//$'\r'/ ; }"
+	for c in '>' '<' '|' ';' '&' '(' ')' '"' "'" '`' ',' '='; do
+		norm="${norm//"$c"/ $c }"
+	done
+	# A trailing ';' sentinel closes the last simple command. Iterated, not
+	# indexed: bash 3.2 arrays index in O(n), which made long commands O(n^2).
+	read -ra toks <<<"$norm ;" || true
+	for t in ${toks[@]+"${toks[@]}"}; do
+		if [ "$redir" = 1 ]; then
+			# '>>', '>|' and '>&' tokenise as '>' plus a second operator token;
+			# a quote glued to the target is skipped. The next token is the target.
+			case "$t" in '>'|'|'|'&'|'"'|"'"|'`') continue ;; esac
+			redir=0
+			is_protected_path "$t" && block "redirecting output onto a protected path is not allowed for agents (path: $t)."
+			continue
+		fi
+		case "$t" in
+			';'|'|'|'&')
+				if [ -n "$prot" ]; then
+					[ -n "$write" ] && block "'$write' on a protected path is not allowed for agents (path: $prot)."
+					[ -n "$sedw" ] && [ -n "$sedi" ] && block "in-place sed on a protected path is not allowed for agents (path: $prot)."
+					[ -n "$interp" ] && [ -n "$inline" ] && block "an inline '$interp' program naming a protected path is not allowed for agents (path: $prot)."
+				fi
+				prot="" write="" sedw="" sedi="" interp="" inline=""
+				continue
+				;;
+			'>') redir=1; continue ;;
+			'<'|'('|')'|'"'|"'"|'`'|','|'=') continue ;;
+		esac
+		is_protected_path "$t" && prot="$t"
+		case "$t" in
+			tee|*/tee|ln|*/ln|dd|*/dd|install|*/install|patch|*/patch|gpatch) write="$t" ;;
+			rm|*/rm|rmdir|*/rmdir|unlink|*/unlink|mv|*/mv|cp|*/cp|chmod|*/chmod|chown|*/chown|truncate|*/truncate|shred|*/shred|rsync|*/rsync) write="$t" ;;
+			sed|*/sed|gsed) sedw="$t" ;;
+			-i*|-[a-zA-Z]*i*|--in-place*) sedi=1 ;;
+			python*|*/python*|perl*|*/perl*|ruby*|*/ruby*|node|*/node|php*|*/php*|lua*|*/lua*) interp="$t" ;;
+		esac
+		case "$t" in -c|-e|-[a-zA-Z]*[ce]) inline=1 ;; esac
+	done
+	return 0
+}
 
 # Hook-skipping and history-plumbing patterns — applied to the command AND to
 # invoked script contents.
@@ -115,23 +284,33 @@ check_tamper_patterns() {
 	return 0
 }
 
+# The key path is refused in every mode, dev or not.
+if [ "$mode" = file ]; then
+	check_key_path "$fpath"
+else
+	check_key_path "$cmd"
+fi
+
+# --- file-tool payloads: judged by path only ---------------------------------
+# The content is never scanned: a protected path is refused whatever it says,
+# any other path is allowed whatever it says. REVIEW_HOOK_DEV=1 lifts this so
+# the hooks themselves can be worked on from an agent session.
+if [ "$mode" = file ]; then
+	if [ "${REVIEW_HOOK_DEV:-0}" != "1" ] && is_protected_path "$fpath"; then
+		block "writing to a protected path is not allowed for agents (path: $fpath)."
+	fi
+	exit 0
+fi
+
+# --- Bash commands -----------------------------------------------------------
 hay="$cmd"
 check_bypass_patterns
-# REVIEW_HOOK_DEV=1 in the agent's environment lifts the tamper checks so the
-# hooks themselves can be worked on from an agent session. The bypass checks
-# above stay on regardless.
+# REVIEW_HOOK_DEV=1 in the agent's environment lifts the tamper and
+# protected-path checks so the hooks themselves can be worked on from an agent
+# session. The bypass checks above and the key check stay on regardless.
 if [ "${REVIEW_HOOK_DEV:-0}" != "1" ]; then
 	check_tamper_patterns
-	# Case-insensitive, like the tamper regexes: on a case-insensitive
-	# filesystem a differently spelled path reaches the same file.
-	shopt -s nocasematch
-	case "$fpath" in
-		.githooks/*|*/.githooks/*|.claude/settings.json|*/.claude/settings.json|scripts/review.sh|*/scripts/review.sh|scripts/review-regress.sh|*/scripts/review-regress.sh|scripts/guard-probes.sh|*/scripts/guard-probes.sh|scripts/backstop-probes.sh|*/scripts/backstop-probes.sh)
-			shopt -u nocasematch
-			block "writing to the review hook files is not allowed for agents (path: $fpath)."
-			;;
-	esac
-	shopt -u nocasematch
+	check_protected_writes
 fi
 
 # --- scan invoked script files (bounded; regular files only) -----------------
