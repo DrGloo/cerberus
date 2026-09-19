@@ -32,9 +32,10 @@
 #     stdin: `cat w.sh | bash`, `bash < w.sh`, `python3 < w.py`;
 #   - a protected path reached through a symlink the guard has not seen (the
 #     path predicate is textual: `./` and `..` are folded, links are not);
-#   - the attestation key read through a path the guard does not recognise
-#     (a directory-recursive reader over the cache directory, a variable that
-#     expands to the key path at run time);
+#   - the attestation key read through a path the guard does not recognise: a
+#     directory-recursive reader over the cache directory (grep -r, tar), or a
+#     variable that builds the key path at run time. (Quoted, `./`, `//` and
+#     `cd <dir> && cat key` spellings are recognised.);
 #   - a `cd other/ && ./w.sh` where w.sh is not at that path from the repo root;
 #   - a ./script after a command-prefix word not in the command-position list;
 #   - >64KB of leading padding before the bypass line in a scanned file;
@@ -171,10 +172,39 @@ is_protected_path() {
 # refused, as is a glob under the cache directory that could expand to it.
 # Applied to the command string or the file-tool path only, never to invoked
 # script contents: the hooks and review scripts legitimately read the key.
+#
+# Spellings that fold to the key path are caught per token: each token is
+# normalised (`./`, `//`, `..` folded, case ignored) and matched against
+# review-cache/key. Quotes split tokens, so review-cache/"key" leaves a bare
+# `key` token; a bare `key` token in a command that also names review-cache
+# (`cd .git/review-cache && cat key`) is refused. `key` without review-cache
+# anywhere in the command (`git config user.name key`) is not.
+toks=()
+tokenize() {
+	local norm="$1" c
+	norm="${norm//$'\n'/ ; }"
+	norm="${norm//$'\r'/ ; }"
+	for c in '>' '<' '|' ';' '&' '(' ')' '"' "'" '`' ',' '='; do
+		norm="${norm//"$c"/ $c }"
+	done
+	# Iterated by the callers, not indexed: bash 3.2 arrays index in O(n).
+	read -ra toks <<<"$norm ;" || true
+}
+
 check_key_path() {
+	local t
 	hay="$1"
 	ci 'review-cache/+key([^a-z0-9_-]|$)' && block "the attestation key under review-cache is not readable or writable by agents."
 	ci 'review-cache/+[^[:space:]"'"'"';|&]*[*?[]' && block "globbing under review-cache could reach the attestation key."
+	# Everything below needs the cache directory named somewhere.
+	ci 'review-cache' || return 0
+	tokenize "$1"
+	for t in ${toks[@]+"${toks[@]}"}; do
+		normalize_path "$t"
+		hay="$np"
+		ci '(^|/)review-cache/key([^a-z0-9_-]|$)' && block "the attestation key under review-cache is not readable or writable by agents."
+		ci '^key$' && block "a bare 'key' in a command naming review-cache could reach the attestation key."
+	done
 	return 0
 }
 
@@ -198,23 +228,65 @@ check_key_path() {
 # command position would mean parsing every wrapper's options (`sudo -u me
 # tee`, `timeout 5 tee`, `xargs -I{} tee`), and a wrong guess there is a
 # missed write; a wrong guess here is a rephrased read.
+#
+# The verbs live in WRITE_WORDS (matched by basename, so /bin/tee counts).
+# NOTE: the regex in check_tamper_patterns covers the same five verbs (the
+# mode, delete, move, copy and truncate ones) for the hook directory; keep the
+# two in sync. guard-probes fails if they drift.
+# Also refused, in the same simple command as a protected token: find with
+# -delete/-exec/-ok/-fprint*/-fls; git with a working-tree or index rewriting
+# subcommand; sed with a `w` command. awk is not covered (a '>' inside its
+# program is ambiguous).
+WRITE_WORDS="tee ln dd install patch gpatch rm rmdir unlink mv cp chmod chown truncate shred rsync touch mkdir"
+GIT_WRITE_SUBS=" apply checkout restore clean stash reset rm mv update-index am cherry-pick rebase merge revert "
+
+# Per-simple-command state, owned by check_protected_writes (dynamic scope):
+# prot write sedw sedi sedwc interp inline findc findw gitc gitw.
+classify_token() {
+	local t="$1" b="${1##*/}"
+	is_protected_path "$t" && prot="$t"
+	case " $WRITE_WORDS " in *" $b "*) write="$t" ;; esac
+	case "$t" in
+		sed|*/sed|gsed) sedw="$t" ;;
+		-i*|-[a-zA-Z]*i*|--in-place*) sedi=1 ;;
+		python*|*/python*|perl*|*/perl*|ruby*|*/ruby*|node|*/node|php*|*/php*|lua*|*/lua*) interp="$t" ;;
+	esac
+	case "$t" in
+		-c|-e|-[a-zA-Z]*[ce]) inline=1 ;;
+	esac
+	case "$t" in
+		-delete|-exec*|-ok*|-fprint*|-fls) findw=1 ;;
+	esac
+	case "$t" in
+		w|w[./]*|*/w|*/w[./]*|*[0-9\$]w|s/*/*/*w) sedwc=1 ;;
+	esac
+	case "$b" in find) findc=1 ;; git) gitc=1 ;; esac
+	case "$GIT_WRITE_SUBS" in *" $t "*) gitw=1 ;; esac
+}
+
+# Verdict for the simple command just ended, then reset its state.
+judge_simple_command() {
+	if [ -n "$prot" ]; then
+		[ -n "$write" ] && block "'$write' on a protected path is not allowed for agents (path: $prot)."
+		[ -n "$sedw" ] && [ -n "$sedi" ] && block "in-place sed on a protected path is not allowed for agents (path: $prot)."
+		[ -n "$sedw" ] && [ -n "$sedwc" ] && block "a sed w command on a protected path is not allowed for agents (path: $prot)."
+		[ -n "$findc" ] && [ -n "$findw" ] && block "a find action on a protected path is not allowed for agents (path: $prot)."
+		[ -n "$gitc" ] && [ -n "$gitw" ] && block "a git rewriting subcommand on a protected path is not allowed for agents (path: $prot)."
+		[ -n "$interp" ] && [ -n "$inline" ] && block "an inline '$interp' program naming a protected path is not allowed for agents (path: $prot)."
+	fi
+	prot="" write="" sedw="" sedi="" sedwc="" interp="" inline="" findc="" findw="" gitc="" gitw=""
+}
+
 check_protected_writes() {
-	local norm="$cmd" c t
-	local redir=0 prot="" write="" sedw="" sedi="" interp="" inline=""
-	local toks=()
+	local t redir=0
+	local prot="" write="" sedw="" sedi="" sedwc="" interp="" inline="" findc="" findw="" gitc="" gitw=""
 	# Nothing to protect unless a protected spelling is present somewhere;
 	# the same substrings is_protected_path prefilters on. Keeps the common
 	# command free of the per-token walk.
 	hay="$cmd"
 	ci '\.git|scripts|settings\.json' || return 0
-	norm="${norm//$'\n'/ ; }"
-	norm="${norm//$'\r'/ ; }"
-	for c in '>' '<' '|' ';' '&' '(' ')' '"' "'" '`' ',' '='; do
-		norm="${norm//"$c"/ $c }"
-	done
-	# A trailing ';' sentinel closes the last simple command. Iterated, not
-	# indexed: bash 3.2 arrays index in O(n), which made long commands O(n^2).
-	read -ra toks <<<"$norm ;" || true
+	# A trailing ';' sentinel (added by tokenize) closes the last simple command.
+	tokenize "$cmd"
 	for t in ${toks[@]+"${toks[@]}"}; do
 		if [ "$redir" = 1 ]; then
 			# '>>', '>|' and '>&' tokenise as '>' plus a second operator token;
@@ -226,26 +298,13 @@ check_protected_writes() {
 		fi
 		case "$t" in
 			';'|'|'|'&')
-				if [ -n "$prot" ]; then
-					[ -n "$write" ] && block "'$write' on a protected path is not allowed for agents (path: $prot)."
-					[ -n "$sedw" ] && [ -n "$sedi" ] && block "in-place sed on a protected path is not allowed for agents (path: $prot)."
-					[ -n "$interp" ] && [ -n "$inline" ] && block "an inline '$interp' program naming a protected path is not allowed for agents (path: $prot)."
-				fi
-				prot="" write="" sedw="" sedi="" interp="" inline=""
+				judge_simple_command
 				continue
 				;;
 			'>') redir=1; continue ;;
 			'<'|'('|')'|'"'|"'"|'`'|','|'=') continue ;;
 		esac
-		is_protected_path "$t" && prot="$t"
-		case "$t" in
-			tee|*/tee|ln|*/ln|dd|*/dd|install|*/install|patch|*/patch|gpatch) write="$t" ;;
-			rm|*/rm|rmdir|*/rmdir|unlink|*/unlink|mv|*/mv|cp|*/cp|chmod|*/chmod|chown|*/chown|truncate|*/truncate|shred|*/shred|rsync|*/rsync) write="$t" ;;
-			sed|*/sed|gsed) sedw="$t" ;;
-			-i*|-[a-zA-Z]*i*|--in-place*) sedi=1 ;;
-			python*|*/python*|perl*|*/perl*|ruby*|*/ruby*|node|*/node|php*|*/php*|lua*|*/lua*) interp="$t" ;;
-		esac
-		case "$t" in -c|-e|-[a-zA-Z]*[ce]) inline=1 ;; esac
+		classify_token "$t"
 	done
 	return 0
 }
@@ -279,6 +338,8 @@ check_bypass_patterns() {
 # Tampering with the hook files themselves — command string only (script
 # contents legitimately mention these paths, e.g. review-regress.sh).
 check_tamper_patterns() {
+	# The regex on the next line covers the same five write verbs as WRITE_WORDS
+	# (the token rule above); keep the two in sync. guard-probes fails on drift.
 	ci '(^|[^a-z-])(chmod|rm|mv|cp|truncate)[^|;&]*(\.githooks|pre-commit)' && block "modifying the hook files is not allowed for agents."
 	ci '(>>?[[:space:]]*[^|;&[:space:]]*review-rubric|tee[^|;&]*review-rubric|sed[[:space:]]+-i[^|;&]*review-rubric)' && block "editing the review rubric from the shell is not allowed for agents."
 	return 0
