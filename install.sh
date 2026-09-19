@@ -20,7 +20,7 @@ HOOKS=".githooks"
 SCRIPTS="scripts"
 GUARD_SETTINGS=".claude/settings.json"
 HOOK_FILES="pre-commit post-commit pre-push lib/review-core.sh lib/no-bypass-guard.sh review-rubric.md review.conf.example regress/expected.tsv"
-SCRIPT_FILES="review.sh review-regress.sh guard-probes.sh backstop-probes.sh"
+SCRIPT_FILES="review.sh review-regress.sh guard-probes.sh backstop-probes.sh core-probes.sh"
 PROJECT_RUBRIC="review-rubric.project.md"
 PROJECT_CONF="review.conf"
 

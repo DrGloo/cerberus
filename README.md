@@ -163,19 +163,12 @@ selftest.sh` runs them end to end.
 
 ## Tuning
 
-Everything is a `REVIEW_*` variable in `review.conf`, overridable per
-invocation from the environment:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `REVIEW_MODEL` | `claude-sonnet-5` | model for every review |
-| `REVIEW_SOURCE_DIRS` | `.` | where to search for callers and dangling references |
-| `REVIEW_EXTRA_IGNORE` | | extra globs never worth a review |
-| `REVIEW_LINT_CMD` | | static check run before the model; non-zero blocks, a missing tool is skipped with a note |
-| `REVIEW_TIMEOUT` | `180` | seconds for a small prompt; grows with size up to `REVIEW_TIMEOUT_MAX` (`600`) |
-| `REVIEW_CONTEXT_THRESHOLD` | `30` | changed lines before a file's full text is attached |
-| `REVIEW_MAX_DIFF_BYTES` | `200000` | the diff is truncated past this |
-| `REVIEW_MAX_CONTEXT_BYTES` | `60000` | budget for attached full files |
+Every knob is a `REVIEW_*` key in `.githooks/review.conf`;
+`.githooks/review.conf.example` lists them all with their defaults and what
+they mean. The file is data, not shell: one `KEY=VALUE` per line, quotes
+around the value optional, no variables or command substitution (a line
+that tries is reported and skipped), and a value set in the environment
+(`REVIEW_MODEL=... git commit`) wins over the file.
 
 ## CI
 
@@ -189,6 +182,7 @@ the developer's own authenticated CLI, by design.
 ```
 bash scripts/guard-probes.sh      # the guard
 bash scripts/backstop-probes.sh   # attestation and pre-push, in a scratch clone
+bash scripts/core-probes.sh       # review-core.sh units: the review.conf loader
 bash selftest.sh                  # install into a throwaway repo, run everything
 ```
 

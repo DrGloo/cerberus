@@ -6,16 +6,66 @@
 
 # ---- Per-project configuration ---------------------------------------------
 # Everything language- or repo-specific is read from `review.conf` next to
-# this hook tree (see review.conf.example). The file is plain shell that is
-# sourced, so it may only assign the REVIEW_* variables documented there.
-# It is sourced BEFORE the defaults below on purpose: a default assigned
-# first would win over the file. Environment values set by the caller still
-# beat the file, because the file itself uses `${VAR:-default}`.
+# this hook tree (see review.conf.example). The file is DATA, never sourced:
+# `KEY=VALUE` lines whose key is in REVIEW_CONF_KEYS, one layer of matching
+# quotes stripped, no expansion of any kind. It is read BEFORE the defaults
+# below on purpose: a default assigned first would win over the file.
+# Environment values set by the caller beat the file because the loader
+# skips any key that is already set.
+REVIEW_CONF_KEYS="REVIEW_MODEL REVIEW_SOURCE_DIRS REVIEW_EXTRA_IGNORE REVIEW_LINT_CMD REVIEW_LINT_TOOLS REVIEW_CONTEXT_PATTERNS REVIEW_TIMEOUT REVIEW_TIMEOUT_MAX REVIEW_CONTEXT_THRESHOLD REVIEW_MAX_DIFF_BYTES REVIEW_MAX_CONTEXT_BYTES REVIEW_MAX_CHUNKS"
+
+# review_load_conf <file>: assign the allowlisted keys from a KEY=VALUE file.
+# Blank lines and `#` comments are skipped silently. Every other line that is
+# not an accepted assignment (unknown key, no `=`, a bare command, a value
+# holding `$` or a backtick) is reported on stderr with its line number and
+# skipped, so a config written in the old shell format is loud until fixed.
+# Nothing here evaluates the file: the value is stored with `printf -v`.
+review_load_conf() {
+	local file="$1" line key value n=0 preset=" "
+	[ -f "$file" ] || return 0
+	# Keys the caller already set, snapshotted before the file is read so a
+	# key the file assigns twice still takes the later line.
+	for key in $REVIEW_CONF_KEYS; do
+		[ -z "${!key+set}" ] || preset="$preset$key "
+	done
+	while IFS= read -r line || [ -n "$line" ]; do
+		n=$((n + 1))
+		# Leading whitespace is tolerated; trailing whitespace is part of the value.
+		line="${line#"${line%%[![:space:]]*}"}"
+		case "$line" in
+			''|'#'*) continue ;;
+		esac
+		key="${line%%=*}"
+		value="${line#*=}"
+		if [ "$key" = "$line" ]; then
+			review_conf_note "$n" "$line"; continue
+		fi
+		case " $REVIEW_CONF_KEYS " in
+			*" $key "*) ;;
+			*) review_conf_note "$n" "$line"; continue ;;
+		esac
+		case "$value" in
+			*'$'*|*'`'*) review_conf_note "$n" "$line"; continue ;;
+		esac
+		# One layer of matching quotes, and only when both ends carry them.
+		if [ "${#value}" -ge 2 ]; then
+			case "$value" in
+				\"*\") value="${value#\"}"; value="${value%\"}" ;;
+				\'*\') value="${value#\'}"; value="${value%\'}" ;;
+			esac
+		fi
+		# Environment wins: a key the caller already set is left alone.
+		case "$preset" in *" $key "*) continue ;; esac
+		printf -v "$key" '%s' "$value"
+	done <"$file"
+}
+
+review_conf_note() {
+	printf '[review] note: review.conf line %s ignored: %s\n' "$1" "${2:0:60}" >&2
+}
+
 REVIEW_HOOK_DIR="${REVIEW_HOOK_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)/.githooks}"
-if [ -f "$REVIEW_HOOK_DIR/review.conf" ]; then
-	# shellcheck source=/dev/null
-	. "$REVIEW_HOOK_DIR/review.conf"
-fi
+review_load_conf "$REVIEW_HOOK_DIR/review.conf"
 
 REVIEW_MODEL="${REVIEW_MODEL:-claude-sonnet-5}"
 REVIEW_TIMEOUT="${REVIEW_TIMEOUT:-180}"  # 90 proved too tight for a full-file-context prompt; a timeout fails open, so err high

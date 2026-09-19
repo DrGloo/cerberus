@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end self-test with no model calls: build a throwaway repository from
 # examples/sample-project, install the hooks into it with install.sh, and run
-# the guard and backstop probe suites there. Exit 1 on any failure.
+# the guard, backstop and core probe suites there. Exit 1 on any failure.
 #
 #   bash selftest.sh                    # install + probes, sub-minute
 #   SELFTEST_MODEL=1 bash selftest.sh   # also replay the sample regress suite
@@ -60,25 +60,8 @@ out="$(bash "$ROOT/install.sh" "$REPO" 2>&1)"; rc=$?
 # the probe suites below run against the installed defaults.
 cat "$REPO/$HOOKS/review.conf" >"$S/review.conf.orig"
 
-# --- review.conf values take effect, and the environment still wins ----------
-(
-	cd "$REPO" || exit 1
-	printf 'REVIEW_MODEL="conf-model"\nREVIEW_TIMEOUT=42\n' >>"$HOOKS/review.conf"
-	# shellcheck source=/dev/null
-	. "$HOOKS/lib/review-core.sh"
-	[ "$REVIEW_MODEL" = "conf-model" ] && [ "$REVIEW_TIMEOUT" = "42" ]
-) && ok "review.conf sets the model and timeout" || bad "review.conf values ignored"
-cat "$S/review.conf.orig" >"$REPO/$HOOKS/review.conf"
-(
-	cd "$REPO" || exit 1
-	printf 'REVIEW_MODEL="${REVIEW_MODEL:-conf-model}"\n' >>"$HOOKS/review.conf"
-	export REVIEW_MODEL="env-model"
-	# shellcheck source=/dev/null
-	. "$HOOKS/lib/review-core.sh"
-	[ "$REVIEW_MODEL" = "env-model" ]
-) && ok "environment overrides review.conf" || bad "environment override lost"
-cat "$S/review.conf.orig" >"$REPO/$HOOKS/review.conf"
-
+# The review.conf loader itself (values, quoting, inert shell, environment
+# precedence) is covered by scripts/core-probes.sh, run below.
 (
 	cd "$REPO" || exit 1
 	printf 'REVIEW_EXTRA_IGNORE="docs/* *.snap"\n' >>"$HOOKS/review.conf"
@@ -111,6 +94,7 @@ cat "$S/review.conf.orig" >"$REPO/$HOOKS/review.conf"
 # --- probe suites inside the installed repository ----------------------------
 (cd "$REPO" && bash scripts/guard-probes.sh >"$S/guard.log" 2>&1) && ok "guard probes: $(tail -1 "$S/guard.log")" || { bad "guard probes"; cat "$S/guard.log"; }
 (cd "$REPO" && bash scripts/backstop-probes.sh >"$S/backstop.log" 2>&1) && ok "backstop probes: $(tail -1 "$S/backstop.log")" || { bad "backstop probes"; cat "$S/backstop.log"; }
+(cd "$REPO" && bash scripts/core-probes.sh >"$S/core.log" 2>&1) && ok "core probes: $(tail -1 "$S/core.log")" || { bad "core probes"; cat "$S/core.log"; }
 
 # --- optional: the sample regress suite against a live model -----------------
 if [ "${SELFTEST_MODEL:-0}" = "1" ]; then
