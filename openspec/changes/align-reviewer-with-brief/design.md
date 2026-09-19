@@ -19,14 +19,17 @@ The rubric and prompt were tuned on one Roblox codebase. They already encode evi
 `REVIEW_LINT_TOOLS` is a space-separated list; the rubric section is generated from it at prompt time. Naming the tools lets the model map rules to them ("selene flags unused variables") instead of guessing what "style" means.
 
 ### 2. Callee lookup reuses the definition regex
-Identifiers followed by `(` on added lines are collected, deduplicated, filtered against language keywords, and looked up with `review_grep_tree` using `review_definition_regex` anchored on the name. Each hit is attached with five lines of trailing context. Cap: eight callees, within `REVIEW_MAX_CONTEXT_BYTES`. Callers stay as they are.
+Identifiers followed by `(` on added lines are collected, deduplicated, filtered against language keywords, and looked up with `review_grep_tree` using `review_definition_regex` anchored on the name. Each hit is attached with five lines of trailing context. Cap: eight callees, within the core's context byte budget (a constant after the dedupe change; the same value the full-file attachments already share). Callers stay as they are.
 
 ### 3. Pattern-driven full attachment
-`REVIEW_CONTEXT_PATTERNS` is an ERE matched against the path and the staged content of each changed file. A match attaches the whole file regardless of the changed-line threshold. This is how "the file a RemoteEvent handler lives in" gets in front of the reviewer without tools.
+`REVIEW_CONTEXT_PATTERNS` is an ERE matched against the path and the staged content of each changed file. A match attaches the whole file regardless of the core's changed-line threshold. This is how "the file a RemoteEvent handler lives in" gets in front of the reviewer without tools.
 
-### 4. Suppression enforced by the hook
-The model is told about the marker but asked to report anyway. After `review_call_model`, `review_apply_suppressions` walks the findings, reads the cited line and the line above from the tree under review (`git show :path`, or `rev:path` for ranges), demotes on a marker with a reason, appends a WARN for a marker without one, and rewrites the verdict line. The sanitized, validated output is the input, so the contract holds before and after.
+### 4. Suppression enforced by the hook, honoured only from the base revision
+The model is told about the marker but asked to report anyway. After `review_call_model`, `review_apply_suppressions` walks the findings and reads the cited line and the line above from the **base revision**, not the tree under review: `HEAD:path` for a staged diff, `<base>:path` for a range, with the cited line number mapped back through the diff's hunks. A marker that exists in the base demotes the finding to WARN with its reason printed. A marker the diff itself adds does not demote anything; the finding keeps its severity and the hook adds a WARN saying the marker takes effect only once it has been reviewed in. The sanitized, validated output is the input, so the contract holds before and after.
 
+This is what stops a change from clearing its own blocker: a marker has to land in one reviewed commit before it can suppress a finding in the next.
+
+- *Alternative: read markers from the tree under review.* Rejected: the diff that introduces a defect could introduce its excuse in the same line and pass.
 - *Alternative: let the model apply suppressions.* Rejected: unreliable, and it would let a prompt-injected comment argue with the reviewer.
 
 ### 5. Rates in the regress summary

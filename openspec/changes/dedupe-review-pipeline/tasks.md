@@ -30,7 +30,7 @@
 ## 5. Guard phases and knobs
 
 - [ ] 5.1 `no-bypass-guard.sh` split into the named phases with the renamed globals; guard-probes unchanged and green
-- [ ] 5.2 Timeout-step and context-budget knobs become constants; `REVIEW_HOOK_DIR` internal
+- [ ] 5.2 Timeout-step and context-budget knobs become constants; `REVIEW_HOOK_DIR` internal; the callee and pattern attachments from align-reviewer-with-brief read the constants, not config keys
 - [ ] 5.3 `review.conf.example` is the only config reference
 
 ## 6. Verification

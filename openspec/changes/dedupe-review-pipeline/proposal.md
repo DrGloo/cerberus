@@ -1,6 +1,6 @@
 ## Why
 
-Every fix to the review pipeline has to be made twice, because `pre-commit` and `scripts/review.sh` carry the same sixty lines, and `pre-push` couples to the second copy by grepping its stdout for exact strings. The list of installed files is hand-maintained in seven places, one of which is the guard's protected-path list, so a new script is silently unprotected until someone remembers. Three probe suites each define their own counters, stub reviewer and payload builders. Three files are byte-for-byte or near duplicates of others. The maintenance cost is around the core, not in it, and it is about six hundred lines.
+Every fix to the review pipeline has to be made twice, because `pre-commit` and `scripts/review.sh` carry the same sixty lines, and `pre-push` couples to the second copy by grepping its stdout for exact strings. The list of installed files is hand-maintained in seven places, one of which is the guard's protected-path list, so a new script is silently unprotected until someone remembers. Three probe suites each define their own counters, stub reviewer and payload builders. Three files are byte-for-byte or near duplicates of others. The maintenance cost is around the core, not in it, and it is about eight hundred lines.
 
 ## What Changes
 

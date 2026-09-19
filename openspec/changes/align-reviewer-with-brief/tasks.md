@@ -13,8 +13,8 @@
 
 ## 3. Suppression
 
-- [ ] 3.1 `review-core.sh`: `review_apply_suppressions` (line and line-above lookup from the tree under review, demotion, missing-reason WARN, verdict rewrite) called from both drivers after validation
-- [ ] 3.2 `core-probes.sh`: suppressed blocker becomes a WARN with the reason and the commit passes; marker three lines away does nothing; bare marker adds a WARN and keeps the finding
+- [ ] 3.1 `review-core.sh`: `review_apply_suppressions` (line and line-above lookup from the base revision with hunk-mapped line numbers, demotion, missing-reason WARN, unreviewed-marker WARN, verdict rewrite) called from both drivers after validation
+- [ ] 3.2 `core-probes.sh`: marker present in HEAD demotes a blocker to WARN with the reason and the commit passes; marker added by the same diff leaves the block in place and adds a WARN; marker three lines away does nothing; bare marker adds a WARN and keeps the finding
 
 ## 4. Eval set
 

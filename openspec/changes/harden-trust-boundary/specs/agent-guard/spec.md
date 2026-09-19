@@ -5,7 +5,7 @@
 The guard SHALL hold a single predicate that decides whether a path is protected. Protected paths are everything under the hook directory, the Claude Code settings file, the review and probe scripts, and everything under the repository's git directory, including a linked worktree's git directory. Matching SHALL be case-insensitive and SHALL apply to relative and absolute spellings. Probe suite: guard-probes.
 
 #### Scenario: Every manifest path is protected
-- **WHEN** guard-probes submits a file-tool payload for each path the install manifest lists as hook, lib, script or settings
+- **WHEN** guard-probes submits a file-tool payload for each path the install manifest lists as hook, lib, script, probe or settings
 - **THEN** every one is refused
 
 #### Scenario: Git directory paths

@@ -2,7 +2,11 @@
 
 ### Requirement: The manifest is the only file list
 
-`MANIFEST` SHALL list every installed path with a kind: `hook`, `lib`, `script`, `probe`, `settings`, `seed`. `install.sh` SHALL copy exactly the manifest's non-seed paths, the workflows SHALL syntax-check and exec-check from it, `selftest.sh` SHALL verify each installed path from it, and a guard probe SHALL assert every `hook`, `lib`, `script`, `probe` and `settings` path is refused as a write target. Probe suite: guard-probes, selftest.
+`MANIFEST` SHALL list every installed path with a kind: `hook`, `lib`, `script`, `probe`, `settings`, `seed`. `install.sh` SHALL copy exactly the `hook`, `lib`, `script` and `probe` paths, SHALL merge the `settings` path into an existing file (as it does today) rather than replace it, and SHALL create `seed` paths only when absent. The workflows SHALL syntax-check and exec-check from the manifest, `selftest.sh` SHALL verify each installed path from it, and a guard probe SHALL assert every `hook`, `lib`, `script`, `probe` and `settings` path is refused as a write target. Probe suite: guard-probes, selftest.
+
+#### Scenario: Existing settings survive an upgrade
+- **WHEN** a target's settings file already holds its own permissions and hooks
+- **THEN** after `--upgrade` those entries remain and the guard entry is present once
 
 #### Scenario: New script added
 - **WHEN** a path is added to the manifest but not to the guard's protected set

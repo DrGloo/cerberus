@@ -9,8 +9,8 @@
 - **THEN** the two prompts differ only in the mode label and the show revision
 
 #### Scenario: Exit codes drive pre-push
-- **WHEN** `review.sh` returns 1, 10, 12 or 13 for a range
-- **THEN** pre-push refuses, allows unattested, allows unattested, or refuses with the override named, respectively, without parsing stdout
+- **WHEN** `review.sh` returns 0, 1, 10, 11, 12 or 13 for a range
+- **THEN** pre-push attests and allows (0), refuses (1), allows unattested with a warning (10, 11, 12), or refuses naming the `REVIEW_ALLOW_OVERSIZE=1` override (13), without parsing stdout. Code 13 is the one deliberate refusal outside a BLOCK: an unreviewable range is a size the author chose, not a reviewer failure, and the override keeps the human in charge
 
 ### Requirement: Outcome handling stays in the hooks
 
