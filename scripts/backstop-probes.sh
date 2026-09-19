@@ -234,25 +234,33 @@ fi
 # sleep of its own behind, and still enforce the deadline on a command that
 # hangs. The deadline here is deliberately long so a leftover sleep would be
 # unmistakable.
-(
-	# shellcheck source=/dev/null
-	. "$HOOKS/lib/review-core.sh"
-	before="$(pgrep -f 'sleep 300' 2>/dev/null | wc -l | tr -d ' ')"
-	start="$(date +%s)"
-	review_run_with_timeout 300 "$S/fast.out" sh -c 'echo fast'; rc=$?
-	elapsed=$(( $(date +%s) - start ))
-	sleep 1
-	after="$(pgrep -f 'sleep 300' 2>/dev/null | wc -l | tr -d ' ')"
-	[ "$rc" -eq 0 ] && [ "$elapsed" -le 5 ] && [ "$(cat "$S/fast.out")" = "fast" ] && [ "$after" -le "$before" ]
-) && ok "watcher: a fast command returns at once and leaves no sleep behind" || bad "watcher fast path"
-(
-	# shellcheck source=/dev/null
-	. "$HOOKS/lib/review-core.sh"
-	start="$(date +%s)"
-	review_run_with_timeout 1 "$S/slow.out" sleep 30; rc=$?
-	elapsed=$(( $(date +%s) - start ))
-	[ "$rc" -eq 124 ] && [ "$elapsed" -le 10 ]
-) && ok "watcher: a hung command is killed at the deadline with rc 124" || bad "watcher deadline"
+# The durations are deliberately odd numbers so pgrep counts only the sleeps
+# these two probes started, whatever else is running on the machine.
+if command -v pgrep >/dev/null 2>&1; then
+	(
+		# shellcheck source=/dev/null
+		. "$HOOKS/lib/review-core.sh"
+		start="$(date +%s)"
+		review_run_with_timeout 2977 "$S/fast.out" sh -c 'echo fast'; rc=$?
+		elapsed=$(( $(date +%s) - start ))
+		sleep 1
+		left="$(pgrep -f 'sleep 2977' 2>/dev/null | wc -l | tr -d ' ')"
+		[ "$rc" -eq 0 ] && [ "$elapsed" -le 5 ] && [ "$(cat "$S/fast.out")" = "fast" ] && [ "$left" -eq 0 ]
+	) && ok "watcher: a fast command returns at once and leaves no sleep behind" || bad "watcher fast path"
+	(
+		# shellcheck source=/dev/null
+		. "$HOOKS/lib/review-core.sh"
+		start="$(date +%s)"
+		review_run_with_timeout 1 "$S/slow.out" sleep 2963; rc=$?
+		elapsed=$(( $(date +%s) - start ))
+		sleep 1
+		left="$(pgrep -f 'sleep 2963' 2>/dev/null | wc -l | tr -d ' ')"
+		[ "$rc" -eq 124 ] && [ "$elapsed" -le 10 ] && [ "$left" -eq 0 ]
+	) && ok "watcher: a hung command is killed at the deadline, rc 124, child reaped" || bad "watcher deadline"
+else
+	bad "watcher probes need pgrep"
+	bad "watcher probes need pgrep"
+fi
 
 echo
 echo "backstop-probes: $((checks - fail))/$checks checks passed"
