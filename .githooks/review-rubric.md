@@ -112,19 +112,44 @@ path, including the error path. Look for:
 - Cancelling or closing something that may already be finished, where that
   raises and aborts the rest of the cleanup.
 
-### Component sizing
-Flag functions past roughly 50 lines or holding more than one reason to change,
-and modules that have grown past a single clear responsibility. **When you flag
-size, name the specific seam**, for example "extract the threshold block at
-lines 120 to 158 into `resolveTier`", never just "this function is too long".
+### Code smells (WARN at most)
+These are maintainability findings, never blockers, and they apply only to
+code the diff adds or rewrites. For each one, say which line and what the
+smaller shape is.
+- **Complexity, per function.** Estimate two numbers for every function the
+  diff adds or substantially rewrites. *Cyclomatic*: one plus the number of
+  decision points (`if`, `elif`, `for`, `while`, `case` arm, `catch`, `&&`,
+  `||`, ternary). *Cognitive*: the same points, but each one counts one plus
+  its nesting depth, and a `break`/`continue`/`goto` out of a loop or a
+  recursive call counts one. Flag cyclomatic above 10 or cognitive above 15,
+  and state both estimates in the finding: "cyclomatic ≈ 14, cognitive ≈ 22".
+  **Name the specific seam**: "extract the threshold block at lines 120 to
+  158 into `resolveTier`", never "this function is too long". Length alone
+  (past roughly 50 lines) or more than one reason to change is the same
+  finding.
+- **Complexity, per file.** When the diff adds more than one function over
+  the thresholds to one file, or a changed file's functions now sum to a
+  cognitive estimate above 100, one finding on the file naming the two or
+  three functions that carry most of it and the module split that would
+  help.
+- **Deep nesting:** control flow nested past three levels. Name the guard
+  clause or early return that flattens it.
+- **Dead code:** an unreachable branch, a condition that is always true or
+  false, a function or parameter the diff adds and nothing uses, a variable
+  assigned and never read, commented-out code, and code kept "for later".
+- **Bad naming:** names that describe mechanism instead of intent (`data2`,
+  `tmp`, `handleIt`, `flag`), booleans without `is`/`has`/`should`, a getter
+  that mutates, a name that lies about what it returns, and the same concept
+  under two names in one file.
+- **Duplication:** logic the diff adds that already exists in the file or in
+  a helper the file already imports.
+- **Modules** that have grown past a single clear responsibility.
 
 ### Maintainability, judged against a specific bar
 > Could an entry-level developer, unfamiliar with this code, open this file and
 > make a correct small change within thirty minutes?
 
 Flag what would stop them:
-- Names that describe mechanism instead of intent (`data2`, `tmp`, `handleIt`).
-- Control flow nested past three levels.
 - Implicit coupling between distant files: a field written in one module and
   read by name in another with nothing linking them.
 - Magic values that belong in configuration or a named constant.

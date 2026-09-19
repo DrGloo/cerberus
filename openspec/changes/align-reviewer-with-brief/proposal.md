@@ -10,6 +10,7 @@ A reviewer earns trust by finding logic bugs and staying quiet otherwise. Measur
 - **Checkable project rules.** The template asks for statements of the form "flag any X that does Y", with one example per BLOCKER class. The Roblox example gains a domain checklist: DataStore budget and session locking, ProcessReceipt idempotency and grant-before-granted, replication cost, yields in loops and callbacks.
 - **Eval set reporting.** The regress runner reports catch rate on BLOCK cases and false-positive rate on PASS cases separately, and `expected.tsv` gains a description column. Three fixtures are added to the Roblox example for the new checklist items.
 - **Scope discipline stated.** One rubric line: no refactors, renames or rewrites outside the change; fixes are the smallest change that addresses the finding.
+- **Code smells as a named dimension.** Overly complex functions, deep nesting, dead code, bad naming and in-file duplication, capped at WARN, scoped to added or rewritten code, with a fixture that measures both the catch and the silence on untouched lines.
 
 Structured output stays as the fixed line format, which the hook already parses and validates; a JSON block would add a parser the pure-bash hooks cannot have.
 

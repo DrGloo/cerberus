@@ -20,7 +20,8 @@
 
 - [ ] 4.1 `review-regress.sh`: fourth description column; catch-rate and false-positive summary
 - [ ] 4.2 Roblox example: fixtures for a non-idempotent receipt, a DataStore call with no retry or budget check, and a per-frame replication burst, with expectations and descriptions
-- [ ] 4.3 Sample project: a style-only PASS fixture and a suppressed-defect PASS fixture with the reason in the expected citation
+- [ ] 4.3 Sample project: a style-only PASS fixture, a suppressed-defect PASS fixture with the reason in the expected citation, a code-smell fixture (deep nesting, dead branch, unused parameter) expected to PASS with WARN citations, and a complexity fixture (twelve decision points over four levels) expected to PASS with a WARN stating both estimates
+- [ ] 4.5 Regress runner: a PASS expectation may list several required WARN citations separated by `|`, so the smell fixture checks each finding
 - [ ] 4.4 README: rubric section and calibration section updated; both example READMEs drop their tables in favour of the description column
 
 ## 5. Verification
