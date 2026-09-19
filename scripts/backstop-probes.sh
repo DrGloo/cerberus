@@ -113,6 +113,29 @@ fi
 git commit -q -m "c";
 sha_c="$(git rev-parse HEAD)"
 
+# 3.3e: a diff over REVIEW_MAX_DIFF_BYTES is reviewed truncated and never
+# attested, on the first run and on a re-run of the same diff (no cache)
+printf '%0400d' 0 >big.txt && git add big.txt
+out="$(REVIEW_MAX_DIFF_BYTES=100 bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+out2="$(REVIEW_MAX_DIFF_BYTES=100 bash "$HOOKS/pre-commit" 2>&1)"; rc2=$?
+if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] && [ ! -e "$PENDING" ] \
+	&& printf '%s' "$out" | grep -q "TRUNCATED" && printf '%s' "$out2" | grep -q "TRUNCATED" \
+	&& grep -q "REVIEW_MAX_DIFF_BYTES" "$LEDGER"; then
+	ok "truncated diff passes without attestation, ledgered, uncached"
+else
+	bad "truncated diff (rc=$rc rc2=$rc2 pending=$([ -e "$PENDING" ] && echo yes || echo no) out2=$out2)"
+fi
+git reset -q big.txt
+
+# 3.3f: the range reviewer reports a truncated PASS as a WARNING line, which
+# is what pre-push keys on to leave the range unattested
+out="$(REVIEW_MAX_DIFF_BYTES=10 bash scripts/review.sh --range "$sha_a..$sha_c" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^\[review\] WARNING:.*truncated'; then
+	ok "range review of a truncated diff warns instead of passing clean"
+else
+	bad "range truncation (rc=$rc out=$out)"
+fi
+
 # --- 3.4: pre-push re-reviews only what was never attested ------------------
 # Ref lines as git supplies them: <local-ref> <local-sha> <remote-ref> <remote-sha>.
 BR="$(git symbolic-ref --short HEAD)"

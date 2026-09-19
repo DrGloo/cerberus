@@ -132,7 +132,9 @@ if [ -n "$REVIEW_LINT_CMD" ] && [ -s "$TMP/paths" ]; then
 		[ -n "$p" ] && LINT_FILES+=("$p")
 	done <"$TMP/paths"
 	lint_bin="${REVIEW_LINT_CMD%% *}"
-	if ! command -v "$lint_bin" >/dev/null 2>&1; then
+	# Resolved from the repo root, the same directory the command runs in, so
+	# a relative ./scripts/lint.sh is found or missed consistently.
+	if ! (cd "$ROOT_DIR" && command -v "$lint_bin" >/dev/null 2>&1); then
 		# A missing tool is not a lint failure; the model review still runs.
 		echo "[review] note: lint tool '$lint_bin' (REVIEW_LINT_CMD) is not installed; lint step skipped."
 	else
@@ -168,7 +170,11 @@ case "$rc" in
 	*)   warn_and_pass "reviewer unavailable or returned an invalid response (exit $rc)" ;;
 esac
 
-cp "$TMP/out" "$CACHE_FILE"
+# A verdict on a truncated diff is never cached: a cache hit would skip the
+# truncation branch below and attest on the second run what the first did not.
+if ! review_diff_truncated "$TMP/diff"; then
+	cat "$TMP/out" >"$CACHE_FILE"
+fi
 # Always-readable copy of the most recent review (agents and humans can `cat` it after the commit).
 {
 	echo "# AI code review — $(date '+%Y-%m-%d %H:%M:%S')"

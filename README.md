@@ -26,8 +26,8 @@ by what went wrong in practice.
 scripts/
   review.sh                   the same review over a branch or any range, for a PR
   review-regress.sh           replays the fixtures through the real hook and checks verdicts
-  guard-probes.sh             67 probes of the agent guard, no model, sub-second
-  backstop-probes.sh          18 probes of the ledger, attestation and re-review logic, no model
+  guard-probes.sh             83 probes of the agent guard, no model, sub-second
+  backstop-probes.sh          20 probes of the ledger, attestation and re-review logic, no model
 install.sh                    copies all of the above into a repository and wires it up
 selftest.sh                   installs into a throwaway repo and runs every probe suite
 templates/                    the agent guard registration and a CI workflow
@@ -153,7 +153,8 @@ that lost context, a swallowed error on a path that cannot corrupt anything.
 A reviewer that blocks everything scores perfectly on a suite of defects.
 
 `examples/sample-project/` ships eight fixtures against a small Python
-service, six that must block and two that must pass. `SELFTEST_MODEL=1 bash
+service, six that must block and two that must pass, verified 8 for 8
+against the model named in its `calibrated-model`. `SELFTEST_MODEL=1 bash
 selftest.sh` runs them end to end.
 
 ## Tuning

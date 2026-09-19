@@ -167,6 +167,9 @@ tw 'scripts/review.sh' 'exit 0'
 tw 'scripts/backstop-probes.sh' 'exit 0'
 twraw '.githooks/lib/no-bypass-guard.sh' 'x'
 twraw '/repo/.claude/settings.json' '{}'
+# Spelling must not matter: a case-insensitive filesystem reaches the same file.
+tw '.GitHooks/Pre-Commit' 'x'
+tw 'Scripts/Review.sh' 'x'
 
 expect_allow
 tw 'src/server/Foo.lua' 'return {}'

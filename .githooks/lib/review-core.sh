@@ -364,10 +364,13 @@ review_run_with_timeout() {
 	# 2>/dev/null: keep bash's "Terminated" job notice out of the commit output.
 	wait "$pid" 2>/dev/null || rc=$?
 
-	# The sleep is the watcher's child; killing only the subshell leaves it
-	# running for the rest of the timeout.
+	# Freeze the watcher before touching its sleep: killed first, the sleep
+	# would let the subshell run on to its kill sequence against a pid that
+	# wait has already reaped. Frozen, it can neither continue nor start the
+	# second sleep, and KILL then ends it.
+	kill -STOP "$watcher" 2>/dev/null
 	pkill -P "$watcher" 2>/dev/null
-	kill "$watcher" 2>/dev/null
+	kill -KILL "$watcher" 2>/dev/null
 	wait "$watcher" 2>/dev/null || true
 
 	# A signal death (128+n) here means the timer fired: nothing else kills it.

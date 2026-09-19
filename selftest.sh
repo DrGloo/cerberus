@@ -96,6 +96,16 @@ cat "$S/review.conf.orig" >"$REPO/$HOOKS/review.conf"
 	git reset -q app/config.py && git checkout -q -- app/config.py
 	[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'lint step'
 ) && ok "a failing REVIEW_LINT_CMD blocks before any model call" || bad "lint step"
+(
+	cd "$REPO" || exit 1
+	printf 'REVIEW_LINT_CMD="definitely-not-an-installed-linter"\n' >>"$HOOKS/review.conf"
+	printf 'y = 2\n' >>app/config.py
+	git add app/config.py
+	# No reviewer on this PATH either, so the run ends in the fail-open branch.
+	out="$(PATH="/usr/bin:/bin" ANTHROPIC_API_KEY="" REVIEW_TIMEOUT=5 bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+	git reset -q app/config.py && git checkout -q -- app/config.py
+	[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'lint step skipped'
+) && ok "a missing lint tool is skipped with a note, not treated as a failure" || bad "missing lint tool"
 cat "$S/review.conf.orig" >"$REPO/$HOOKS/review.conf"
 
 # --- probe suites inside the installed repository ----------------------------

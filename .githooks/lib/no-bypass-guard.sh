@@ -122,11 +122,16 @@ check_bypass_patterns
 # above stay on regardless.
 if [ "${REVIEW_HOOK_DEV:-0}" != "1" ]; then
 	check_tamper_patterns
+	# Case-insensitive, like the tamper regexes: on a case-insensitive
+	# filesystem a differently spelled path reaches the same file.
+	shopt -s nocasematch
 	case "$fpath" in
 		.githooks/*|*/.githooks/*|.claude/settings.json|*/.claude/settings.json|scripts/review.sh|*/scripts/review.sh|scripts/review-regress.sh|*/scripts/review-regress.sh|scripts/guard-probes.sh|*/scripts/guard-probes.sh|scripts/backstop-probes.sh|*/scripts/backstop-probes.sh)
+			shopt -u nocasematch
 			block "writing to the review hook files is not allowed for agents (path: $fpath)."
 			;;
 	esac
+	shopt -u nocasematch
 fi
 
 # --- scan invoked script files (bounded; regular files only) -----------------
