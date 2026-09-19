@@ -138,5 +138,44 @@ tcd "$TMPD" 'cat ./wrapper.sh'
 tcd "$TMPD" 'wc -l ./wrapper.sh'
 tcd "$TMPD" 'grep -n Rate ./wrapper.sh'
 
+# --- file-editing tools: a path under the hook tree is a tamper --------------
+# Write/Edit payloads carry a path instead of a command; the content is
+# irrelevant to the verdict.
+tw() {
+	local rc=0
+	jq -cn --arg p "$1" --arg c "$2" '{tool_input:{file_path:$p,content:$c}}' | bash "$G" >/dev/null 2>&1 || rc=$?
+	note "$rc" "write $1"
+}
+twraw() {
+	local json rc=0
+	json="$(jq -cn --arg p "$1" --arg c "$2" '{tool_input:{file_path:$p,content:$c}}')"
+	printf '%s' "$json" | PATH=/nonexistent /bin/bash "$G" >/dev/null 2>&1 || rc=$?
+	note "$rc" "no-jq write $1"
+}
+tdev() {
+	local rc=0
+	jq -cn --arg p "$1" --arg c "x" '{tool_input:{file_path:$p,content:$c}}' | REVIEW_HOOK_DEV=1 bash "$G" >/dev/null 2>&1 || rc=$?
+	note "$rc" "hook-dev write $1"
+}
+
+expect_block
+tw '.githooks/pre-commit' 'echo relaxed'
+tw '/repo/.githooks/review-rubric.md' '# lenient'
+tw '.githooks/lib/review-core.sh' 'x'
+tw '.claude/settings.json' '{}'
+tw 'scripts/review.sh' 'exit 0'
+tw 'scripts/backstop-probes.sh' 'exit 0'
+twraw '.githooks/lib/no-bypass-guard.sh' 'x'
+twraw '/repo/.claude/settings.json' '{}'
+
+expect_allow
+tw 'src/server/Foo.lua' 'return {}'
+tw 'docs/hooks.md' 'the staged-diff hook lives in the hook directory'
+tw 'scripts/deploy.sh' 'echo deploying'
+twraw 'README.md' 'x'
+# Hook development mode lifts only the path and tamper checks.
+tdev '.githooks/pre-commit'
+tdev 'scripts/review.sh'
+
 echo "guard-probes: $((total - fail))/$total passed"
 [ "$fail" -eq 0 ]

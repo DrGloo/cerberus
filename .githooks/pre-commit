@@ -97,7 +97,9 @@ git diff --cached --unified=8 --diff-filter=ACMRD -- "${paths[@]}" >"$TMP/diff"
 # proceeds; verdicts may just be calibrated for a different model.
 CALIBRATED_FILE="$HOOK_DIR/regress/calibrated-model"
 CALIBRATED="$(cat "$CALIBRATED_FILE" 2>/dev/null || echo none)"
-if [ "$CALIBRATED" != "$REVIEW_MODEL" ]; then
+# Silent until the project has at least one fixture: with nothing to
+# calibrate against, the note would nag on every commit.
+if [ "$CALIBRATED" != "$REVIEW_MODEL" ] && grep -qE '^[^#[:space:]]' "$HOOK_DIR/regress/expected.tsv" 2>/dev/null; then
 	echo "[review] note: $REVIEW_MODEL is not the calibrated model ($CALIBRATED) — run scripts/review-regress.sh to recalibrate."
 fi
 
@@ -129,10 +131,16 @@ if [ -n "$REVIEW_LINT_CMD" ] && [ -s "$TMP/paths" ]; then
 	while IFS= read -r p; do
 		[ -n "$p" ] && LINT_FILES+=("$p")
 	done <"$TMP/paths"
-	# shellcheck disable=SC2086
-	if ! (cd "$ROOT_DIR" && $REVIEW_LINT_CMD "${LINT_FILES[@]}"); then
-		echo "[review] BLOCK — the lint step (REVIEW_LINT_CMD) failed on staged files; fix them and re-commit."
-		exit 1
+	lint_bin="${REVIEW_LINT_CMD%% *}"
+	if ! command -v "$lint_bin" >/dev/null 2>&1; then
+		# A missing tool is not a lint failure; the model review still runs.
+		echo "[review] note: lint tool '$lint_bin' (REVIEW_LINT_CMD) is not installed; lint step skipped."
+	else
+		# shellcheck disable=SC2086
+		if ! (cd "$ROOT_DIR" && $REVIEW_LINT_CMD "${LINT_FILES[@]}"); then
+			echo "[review] BLOCK — the lint step (REVIEW_LINT_CMD) failed on staged files; fix them and re-commit."
+			exit 1
+		fi
 	fi
 fi
 
@@ -171,6 +179,13 @@ cp "$TMP/out" "$CACHE_FILE"
 
 echo
 if review_report "$TMP/out"; then
+	if review_diff_truncated "$TMP/diff"; then
+		# The reviewer saw only the head of the diff. Let the commit through
+		# with what it found, but never attest it: pre-push must look again.
+		ledger_append "diff over REVIEW_MAX_DIFF_BYTES; reviewed truncated"
+		echo "[review] PASS on a TRUNCATED diff (over ${REVIEW_MAX_DIFF_BYTES} bytes); commit allowed but not attested, so pre-push re-reviews it. Full review: $CACHE_DIR/last-review.md"
+		exit 0
+	fi
 	echo "[review] PASS — findings above are advisory; full review: $CACHE_DIR/last-review.md"
 	mark_reviewed
 	exit 0

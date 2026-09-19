@@ -63,6 +63,11 @@ esac
 
 echo
 if review_report "$TMP/out"; then
+	if review_diff_truncated "$TMP/diff"; then
+		# A WARNING line is what pre-push keys on to leave the range unattested.
+		echo "[review] WARNING: diff over ${REVIEW_MAX_DIFF_BYTES} bytes was reviewed truncated; PASS on what was seen, nothing attested."
+		exit 0
+	fi
 	echo "[review] PASS"
 	exit 0
 fi

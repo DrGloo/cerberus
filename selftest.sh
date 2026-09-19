@@ -59,6 +59,26 @@ out="$(bash "$ROOT/install.sh" "$REPO" 2>&1)"; rc=$?
 # Both tests append to review.conf; the original is restored afterwards so
 # the probe suites below run against the installed defaults.
 cat "$REPO/$HOOKS/review.conf" >"$S/review.conf.orig"
+
+# --- review.conf values take effect, and the environment still wins ----------
+(
+	cd "$REPO" || exit 1
+	printf 'REVIEW_MODEL="conf-model"\nREVIEW_TIMEOUT=42\n' >>"$HOOKS/review.conf"
+	# shellcheck source=/dev/null
+	. "$HOOKS/lib/review-core.sh"
+	[ "$REVIEW_MODEL" = "conf-model" ] && [ "$REVIEW_TIMEOUT" = "42" ]
+) && ok "review.conf sets the model and timeout" || bad "review.conf values ignored"
+cat "$S/review.conf.orig" >"$REPO/$HOOKS/review.conf"
+(
+	cd "$REPO" || exit 1
+	printf 'REVIEW_MODEL="${REVIEW_MODEL:-conf-model}"\n' >>"$HOOKS/review.conf"
+	export REVIEW_MODEL="env-model"
+	# shellcheck source=/dev/null
+	. "$HOOKS/lib/review-core.sh"
+	[ "$REVIEW_MODEL" = "env-model" ]
+) && ok "environment overrides review.conf" || bad "environment override lost"
+cat "$S/review.conf.orig" >"$REPO/$HOOKS/review.conf"
+
 (
 	cd "$REPO" || exit 1
 	printf 'REVIEW_EXTRA_IGNORE="docs/* *.snap"\n' >>"$HOOKS/review.conf"

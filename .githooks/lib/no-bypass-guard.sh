@@ -29,6 +29,8 @@
 # payload is scanned — the command text is embedded in it verbatim (modulo
 # quote escaping, which no pattern below relies on).
 
+set -u
+
 input=""
 IFS= read -r -d '' input
 
@@ -37,6 +39,28 @@ if command -v jq >/dev/null 2>&1; then
 	cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)" || cmd=""
 fi
 [ -n "$cmd" ] || cmd="$input"
+
+# The file-editing tools carry a path instead of a command. A write aimed at
+# the hook tree is a tamper whatever its content says, so the path is checked
+# on its own below. Without jq the path is cut out of the raw JSON.
+fpath=""
+if command -v jq >/dev/null 2>&1; then
+	fpath="$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' 2>/dev/null)" || fpath=""
+fi
+if [ -z "$fpath" ]; then
+	case "$input" in
+		*'"file_path"'*)
+			fpath="${input#*\"file_path\"}"
+			fpath="${fpath#*\"}"
+			fpath="${fpath%%\"*}"
+			;;
+		*'"notebook_path"'*)
+			fpath="${input#*\"notebook_path\"}"
+			fpath="${fpath#*\"}"
+			fpath="${fpath%%\"*}"
+			;;
+	esac
+fi
 
 WHERE=""
 block() {
@@ -93,7 +117,17 @@ check_tamper_patterns() {
 
 hay="$cmd"
 check_bypass_patterns
-check_tamper_patterns
+# REVIEW_HOOK_DEV=1 in the agent's environment lifts the tamper checks so the
+# hooks themselves can be worked on from an agent session. The bypass checks
+# above stay on regardless.
+if [ "${REVIEW_HOOK_DEV:-0}" != "1" ]; then
+	check_tamper_patterns
+	case "$fpath" in
+		.githooks/*|*/.githooks/*|.claude/settings.json|*/.claude/settings.json|scripts/review.sh|*/scripts/review.sh|scripts/review-regress.sh|*/scripts/review-regress.sh|scripts/guard-probes.sh|*/scripts/guard-probes.sh|scripts/backstop-probes.sh|*/scripts/backstop-probes.sh)
+			block "writing to the review hook files is not allowed for agents (path: $fpath)."
+			;;
+	esac
+fi
 
 # --- scan invoked script files (bounded; regular files only) -----------------
 # A path is a scan target only when it is being executed: the argument to

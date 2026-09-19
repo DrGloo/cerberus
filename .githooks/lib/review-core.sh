@@ -4,6 +4,19 @@
 # path filtering, prompt assembly, the timeout-guarded model call, and the
 # verdict contract.
 
+# ---- Per-project configuration ---------------------------------------------
+# Everything language- or repo-specific is read from `review.conf` next to
+# this hook tree (see review.conf.example). The file is plain shell that is
+# sourced, so it may only assign the REVIEW_* variables documented there.
+# It is sourced BEFORE the defaults below on purpose: a default assigned
+# first would win over the file. Environment values set by the caller still
+# beat the file, because the file itself uses `${VAR:-default}`.
+REVIEW_HOOK_DIR="${REVIEW_HOOK_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)/.githooks}"
+if [ -f "$REVIEW_HOOK_DIR/review.conf" ]; then
+	# shellcheck source=/dev/null
+	. "$REVIEW_HOOK_DIR/review.conf"
+fi
+
 REVIEW_MODEL="${REVIEW_MODEL:-claude-sonnet-5}"
 REVIEW_TIMEOUT="${REVIEW_TIMEOUT:-180}"  # 90 proved too tight for a full-file-context prompt; a timeout fails open, so err high
 # Large prompts need proportionally longer: a 150 KB multi-file diff and a
@@ -19,18 +32,6 @@ REVIEW_CONTEXT_THRESHOLD="${REVIEW_CONTEXT_THRESHOLD:-30}"  # changed lines befo
 REVIEW_MAX_DIFF_BYTES="${REVIEW_MAX_DIFF_BYTES:-200000}"
 REVIEW_MAX_CONTEXT_BYTES="${REVIEW_MAX_CONTEXT_BYTES:-60000}"  # budget for full-file attachments; the diff always wins over context
 
-# ---- Per-project configuration ---------------------------------------------
-# Everything language- or repo-specific is read from `review.conf` next to
-# this hook tree (see review.conf.example). The file is plain shell that is
-# sourced, so it may only assign the REVIEW_* variables documented there.
-# Environment values set by the caller win over the file: the file uses
-# `${VAR:-default}` and every hook exports nothing, so a one-off
-# `REVIEW_MODEL=... git commit` still works.
-REVIEW_HOOK_DIR="${REVIEW_HOOK_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)/.githooks}"
-if [ -f "$REVIEW_HOOK_DIR/review.conf" ]; then
-	# shellcheck source=/dev/null
-	. "$REVIEW_HOOK_DIR/review.conf"
-fi
 # Directories git-grep searches for callers and dangling references. "." is
 # the whole tree; narrow it to the source roots on a repo with large docs or
 # fixtures, so the reviewer is not shown matches from prose.
@@ -187,6 +188,21 @@ review_definition_names() {
 		| sed -E 's/.*[.:[:space:]]//'
 }
 
+# review_diff_truncated <diff_file> -> 0 when the diff is over
+#   REVIEW_MAX_DIFF_BYTES, so the reviewer saw only its head. A review of a
+#   truncated diff is still worth showing, but callers must never attest it:
+#   attestation is the one thing that skips the pre-push backstop.
+review_diff_truncated() {
+	[ "$(wc -c <"$1" | tr -d ' ')" -gt "$REVIEW_MAX_DIFF_BYTES" ]
+}
+
+# review_label <text>: paths printed into the prompt frame, outside the
+#   sentinels, are repository-controlled. A tracked file whose name contains a
+#   frame line could forge one, so the frame only ever shows a sanitized form.
+review_label() {
+	printf '%s' "$1" | tr -c '[:print:]' '?' | sed -E 's/-{2,}/-/g; s/[<>]/?/g'
+}
+
 # review_rubric_file <hook_dir> <out_file>
 #   Assembles the rubric the reviewer sees: the generic rubric, with the
 #   project's own section (review-rubric.project.md, optional) spliced in at
@@ -248,14 +264,14 @@ review_build_prompt() {
 				size="$(wc -c <"$tmpfull" | tr -d ' ')"
 				if [ "$size" -le "$attach_budget" ]; then
 					attach_budget=$((attach_budget - size))
-					printf -- '---- FULL CURRENT CONTENTS: %s (%s changed lines) ----\n' "$path" "$count"
+					printf -- '---- FULL CURRENT CONTENTS: %s (%s changed lines) ----\n' "$(review_label "$path")" "$count"
 					# Context only — findings must still cite lines that appear in the diff.
 					review_untrusted <"$tmpfull"
-					printf -- '---- END %s ----\n\n' "$path"
+					printf -- '---- END %s ----\n\n' "$(review_label "$path")"
 				else
 					# Attachments must never crowd out the diff itself: a prompt
 					# that outgrows the model's window fails open as "unavailable".
-					printf -- '---- FULL CONTENTS OF %s OMITTED (%s bytes; over attachment budget) ----\n\n' "$path" "$size"
+					printf -- '---- FULL CONTENTS OF %s OMITTED (%s bytes; over attachment budget) ----\n\n' "$(review_label "$path")" "$size"
 				fi
 				rm -f "$tmpfull"
 			fi
@@ -284,7 +300,7 @@ review_build_prompt() {
 		if [ -s "$deleted_file" ]; then
 			while IFS= read -r path; do
 				[ -n "$path" ] || continue
-				printf -- '---- REMAINING REFERENCES TO DELETED FILE: %s ----\n' "$path"
+				printf -- '---- REMAINING REFERENCES TO DELETED FILE: %s ----\n' "$(review_label "$path")"
 				review_deleted_refs "$path" "$grep_tree" | review_untrusted
 				printf -- '---- END ----\n\n'
 			done <"$deleted_file"
@@ -337,13 +353,20 @@ review_run_with_timeout() {
 	# TERM first, then KILL after a short grace: the reviewer is now exec'd
 	# directly (no subshell to die in its place), and the CLI can sit on a
 	# TERM while mid-request, which would hang the hook past its deadline.
-	( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 5; kill -KILL "$pid" 2>/dev/null ) &
+	# The watcher closes its inherited descriptors first. A caller capturing
+	# this function's stdout with $(...) would otherwise not see EOF until the
+	# orphaned sleep exited, stalling every pre-push and regress run for the
+	# whole timeout after the model had already answered.
+	( exec >/dev/null 2>&1 </dev/null; sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 5; kill -KILL "$pid" 2>/dev/null ) &
 	local watcher=$!
 
 	local rc=0
 	# 2>/dev/null: keep bash's "Terminated" job notice out of the commit output.
 	wait "$pid" 2>/dev/null || rc=$?
 
+	# The sleep is the watcher's child; killing only the subshell leaves it
+	# running for the rest of the timeout.
+	pkill -P "$watcher" 2>/dev/null
 	kill "$watcher" 2>/dev/null
 	wait "$watcher" 2>/dev/null || true
 
@@ -450,13 +473,18 @@ print(json.dumps({
     "messages": [{"role": "user", "content": prompt}],
 }))' "$prompt_file" "$REVIEW_MODEL")" || return 1
 
-		local raw="${out_file}.raw"
+		local raw="${out_file}.raw" curl_cfg="${out_file}.curl" body_file="${out_file}.body"
+		# The key and the body travel in files, never in argv: argv is visible
+		# to every local user in `ps`, and a body near REVIEW_MAX_DIFF_BYTES is
+		# over the Linux single-argument cap, which would fail open as
+		# "unavailable" on exactly the largest diffs.
+		( umask 077; printf '%s' "$body" >"$body_file"; printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY" >"$curl_cfg" )
 		review_run_with_timeout "$REVIEW_TIMEOUT" "$raw" \
-			curl -sS https://api.anthropic.com/v1/messages \
-			-H "x-api-key: ${ANTHROPIC_API_KEY}" \
+			curl -sS --config "$curl_cfg" https://api.anthropic.com/v1/messages \
 			-H "anthropic-version: 2023-06-01" \
 			-H "content-type: application/json" \
-			-d "$body" || rc=$?
+			--data-binary "@$body_file" || rc=$?
+		rm -f "$curl_cfg" "$body_file"
 
 		if [ "$rc" -eq 0 ]; then
 			python3 -c '

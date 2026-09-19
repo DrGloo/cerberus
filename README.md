@@ -103,6 +103,9 @@ work, so the commit goes through with a warning. What makes that safe:
   does not trigger a re-review.
 - **A ledger.** Every escape is appended to `.git/review-cache/fail-open.log`
   with the reason, so a quiet week of timeouts is visible.
+- **No attestation for what the reviewer did not see.** A diff over
+  `REVIEW_MAX_DIFF_BYTES` is reviewed truncated: the commit goes through with
+  whatever was found, is ledgered, and stays unattested.
 
 Humans can still bypass from their own terminal, with the skip variable or
 the `no-verify` flag documented at the top of `pre-commit`. Agents cannot.
@@ -119,12 +122,18 @@ write payload and refuses:
   configuration;
 - history plumbing that never runs hooks;
 - deleting, moving, overwriting or changing the mode of the hook files, and
-  editing the rubric from the shell.
+  editing the rubric from the shell;
+- any write through the file-editing tools to a path under the hook tree,
+  the guard registration, or the review scripts, whatever the content.
 
 It scans up to three invoked script files as well, so a bypass hidden in
 `./deploy.sh` is caught at invocation. It is pure bash builtins with an
 optional `jq`, so a missing tool cannot make it fail open. The header of the
 script lists the residual holes a static inspector cannot close.
+
+To work on the hooks themselves from an agent session, launch the agent with
+`REVIEW_HOOK_DEV=1` in its environment. That lifts the tamper and path checks
+for the session; the bypass checks stay on.
 
 `scripts/guard-probes.sh` is its test suite. Any change to the guard should
 add a probe.
@@ -157,7 +166,7 @@ invocation from the environment:
 | `REVIEW_MODEL` | `claude-sonnet-5` | model for every review |
 | `REVIEW_SOURCE_DIRS` | `.` | where to search for callers and dangling references |
 | `REVIEW_EXTRA_IGNORE` | | extra globs never worth a review |
-| `REVIEW_LINT_CMD` | | static check run before the model; non-zero blocks |
+| `REVIEW_LINT_CMD` | | static check run before the model; non-zero blocks, a missing tool is skipped with a note |
 | `REVIEW_TIMEOUT` | `180` | seconds for a small prompt; grows with size up to `REVIEW_TIMEOUT_MAX` (`600`) |
 | `REVIEW_CONTEXT_THRESHOLD` | `30` | changed lines before a file's full text is attached |
 | `REVIEW_MAX_DIFF_BYTES` | `200000` | the diff is truncated past this |
