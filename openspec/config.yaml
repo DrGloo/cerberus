@@ -1,0 +1,50 @@
+schema: spec-driven
+
+context: |
+  Project: Cerberus — AI code review as git hooks.
+
+  Three hooks in .githooks/: pre-commit reviews the staged diff with a model
+  against a rubric (exit 1 only on a BLOCKER); post-commit attests the commit
+  the review passed (tree compare, then patch-id + sha into
+  .git/review-cache/attested.log); pre-push re-reviews any outgoing commit
+  that was never attested. lib/review-core.sh owns prompt assembly, the
+  timeout-guarded model call, the verdict contract and attestation.
+  lib/no-bypass-guard.sh is a Claude Code PreToolUse hook that stops agents
+  bypassing or tampering with any of it. scripts/ holds the branch reviewer,
+  the seeded-defect regress runner and two no-model probe suites; install.sh
+  copies the tree into a target repo; selftest.sh installs into a throwaway
+  repo and runs every suite.
+
+  Tech: bash 3.2+ (macOS) and bash 5 (Linux), git, optional jq. No other
+  runtime. The reviewer is the `claude` CLI or the Anthropic API via curl.
+
+  Conventions:
+    - Fail open on reviewer failure (timeout, missing CLI, malformed output),
+      fail closed only on a VERDICT: BLOCK backed by a [BLOCKER] line. Every
+      escape is ledgered and left unattested so pre-push re-reviews it.
+    - Attestation is the only thing that skips a re-review, and only the two
+      hooks may write it.
+    - Every block of repository content in the prompt goes through
+      review_untrusted (per-run sentinels). The reviewer runs with no tools,
+      from an empty directory, with the prompt on stdin.
+    - The guard is pure bash builtins (jq optional) and must not fail open
+      when a tool is missing.
+    - Portability: no mapfile, no declare -A, no GNU-only flags, no `timeout`.
+    - Tabs in shell. set -u at the top of every script.
+    - Every behaviour change to a hook carries a probe in scripts/*-probes.sh.
+    - Model-backed checks live in the regress suite (expected.tsv); the probe
+      suites and selftest never call a model.
+
+rules:
+  proposal:
+    - 'Keep proposals concise (<=500 words); lead with what an attacker or a user gains'
+    - 'Mark any change to the attestation record format, the review-cache layout, the guard registration, or the installed file layout as BREAKING for existing installs, and say how install.sh --upgrade handles it'
+  specs:
+    - 'Write requirements as observable hook behaviour: given a repo state and a command, what the hook prints, its exit code, and what attested.log / pending-attest / the ledger contain afterwards'
+    - 'Name the probe suite that will exercise each scenario (guard-probes, backstop-probes, core-probes, selftest, regress)'
+  design:
+    - 'For anything touching the guard or attestation, state the attacker model and which residual holes are accepted, matching the header of no-bypass-guard.sh'
+    - 'State bash 3.2 and BSD-tool compatibility for any new construct'
+  tasks:
+    - 'Group tasks by file; every hook behaviour task is paired with its probe task'
+    - 'The last task of every change runs selftest.sh and the probe suites and records the counts'
