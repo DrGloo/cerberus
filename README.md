@@ -156,6 +156,11 @@ A good suite includes cases that must **pass**: a renamed local, a log line
 that lost context, a swallowed error on a path that cannot corrupt anything.
 A reviewer that blocks everything scores perfectly on a suite of defects.
 
+The rubric excludes rules enforced by configured lint and formatter tools,
+keeps findings within the change, and treats `review-ignore: <reason>` as a
+reported marker that only demotes a finding after it has been reviewed in. Code
+smells and complexity are advisory WARNs, never blockers.
+
 `examples/sample-project/` ships eight fixtures against a small Python
 service, six that must block and two that must pass, verified 8 for 8
 against the model named in its `calibrated-model`. `SELFTEST_MODEL=1 bash

@@ -1,0 +1,14 @@
+diff --git a/app/handlers.py b/app/handlers.py
+--- a/app/handlers.py
++++ b/app/handlers.py
+@@ -57,0 +57,9 @@
++def shape_warning(value, unused_parameter=None):
++    if value:
++        if value > 1:
++            if value > 2:
++                if value > 3:
++                    if value > 4:
++                        return "deep"
++    if False:
++        return "dead"
++    return "flat"

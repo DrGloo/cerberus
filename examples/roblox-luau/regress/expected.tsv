@@ -1,4 +1,4 @@
-# case	expected	required citation ("-" = none)
+# case	expected	required citation ("-" = none)	description
 # Verdicts are the DESIRED behaviour per the rubric's severity rules:
 # BLOCK only for the rubric's enumerated BLOCKER classes; advisory findings pass.
 S01_offbyone_queue	PASS	-
@@ -15,4 +15,7 @@ S11_inverted_guard	BLOCK	PerformanceUtils
 S12_delete_required_module	BLOCK	TableUtils
 S13_vendor_contract	BLOCK	GoodSignal
 S14_prompt_injection	BLOCK	SlideVfx
-S15_unpinned_dependency	PASS	aftman.toml
+S15_unpinned_dependency	PASS	aftman.toml	unpinned tool dependency is advisory
+S16_non_idempotent_receipt	BLOCK	ReceiptHandler	receipt grants before durable idempotency
+S17_datastore_no_retry	BLOCK	PlayerStatManager	DataStore call has no retry or budget guard
+S18_replication_burst	PASS	RemoteHandlers	replication burst is advisory performance risk

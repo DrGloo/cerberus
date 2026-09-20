@@ -1,0 +1,11 @@
+diff --git a/app/handlers.py b/app/handlers.py
+--- a/app/handlers.py
++++ b/app/handlers.py
+@@ -37,5 +37,5 @@ def place_order(store: OrderStore, catalog, user_id, payload):
+     sku = payload.get("sku")
+     if not isinstance(sku, str) or not sku:
+         return {"ok": False, "error": "bad sku"}
+-    quantity = _parse_quantity(payload.get("quantity"))
++    quantity  = _parse_quantity(payload.get("quantity"))
+     if quantity is None:
+         return {"ok": False, "error": "bad quantity"}

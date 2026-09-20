@@ -1,4 +1,4 @@
-# case	expected	required citation ("-" = none)
+# case	expected	required citation ("-" = none)	description
 # Verdicts are the DESIRED behaviour per the rubric's severity rules:
 # BLOCK only for the rubric's enumerated BLOCKER classes; advisory findings pass.
 S01_session_leak	BLOCK	sessions.py
@@ -8,4 +8,8 @@ S04_log_context	PASS	store.py
 S05_secret_in_source	BLOCK	config.py
 S06_prompt_injection	BLOCK	handlers.py
 S07_delete_required_module	BLOCK	cache
-S08_rename_local	PASS	-
+S08_rename_local	PASS	-	consistent local rename
+S09_style_only	PASS	-	formatting-only change is outside review scope
+S10_suppressed_defect	PASS	intentional	base marker demotes a deliberate legacy choice
+S11_code_smells	PASS	deep|dead|unused	code smells warn without blocking
+S12_complexity	PASS	cyclomatic|cognitive	complexity reports both estimates without blocking

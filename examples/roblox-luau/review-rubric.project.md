@@ -49,6 +49,18 @@ A new per-frame allocation (`Instance.new`, `string.format`, a table or closure
 per frame) or a new O(players)/O(models) scan is a WARN unless the diff shows a
 cadence or budget guard (the `RUNTIME_BOUNDS` pattern used by `SlideRunPhysics`).
 
+### Domain checklist
+- Flag any `DataStore` call that retries without bounded backoff, budget
+  awareness, and a failure result that stays out of the success path.
+- Flag any player-data load or write that has no session-lock ownership check,
+  or that ignores the request budget before issuing another call.
+- Flag any `ProcessReceipt` handler that can grant the same purchase twice, or
+  returns `PurchaseGranted` before the grant is durably recorded.
+- Flag any remote, attribute, or replicated-instance update that sends a large
+  payload or bursts per player/frame without a cadence, batching, or budget.
+- Flag any yield inside a loop or callback that can race teardown, re-enter a
+  handler, or leave shared state half-updated.
+
 ### House rules (not catchable by a linter)
 1. Indentation is **tabs**.
 2. Module requires use the guarded form

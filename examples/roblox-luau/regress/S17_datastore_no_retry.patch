@@ -1,0 +1,8 @@
+diff --git a/src/server/services/PlayerStatManager.lua b/src/server/services/PlayerStatManager.lua
+--- a/src/server/services/PlayerStatManager.lua
++++ b/src/server/services/PlayerStatManager.lua
+@@ -42,6 +42,7 @@ local function loadPlayerData(player)
+ 	local key = "player/" .. player.UserId
++	local data = STORE:GetAsync(key)
+ 	return data or DEFAULT_DATA
+ end

@@ -1,0 +1,8 @@
+diff --git a/src/server/services/RemoteHandlers.lua b/src/server/services/RemoteHandlers.lua
+--- a/src/server/services/RemoteHandlers.lua
++++ b/src/server/services/RemoteHandlers.lua
+@@ -30,6 +30,7 @@ local function broadcastState(players, state)
+ 	for _, player in players do
++		StateRemote:FireClient(player, state)
+ 	end
+ end
