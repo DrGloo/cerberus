@@ -61,6 +61,9 @@ case "$rc" in
 	*)   echo "[review] WARNING: reviewer unavailable or returned an invalid response (exit $rc)."; exit 0 ;;
 esac
 
+BASE_REV="${RANGE%%..*}"
+review_apply_suppressions "$TMP/out" "$TMP/diff" "$BASE_REV"
+
 echo
 if review_report "$TMP/out"; then
 	if review_diff_truncated "$TMP/diff"; then

@@ -27,6 +27,13 @@ diff. If you cannot point at a line, you do not have a finding. Do not invent
 callers, do not guess at file contents you were not shown, and do not report
 "this might" or "consider whether" findings. Silence is a valid review.
 
+## Not yours to review
+
+Do not report formatting, import order, naming conventions, unused variables,
+or other rules enforced by the configured lint and formatter tools. The hook
+names those tools in the prompt. When no tools are configured, formatting and
+style are out of scope regardless; spend attention on behaviour and evidence.
+
 ## Severity discipline
 
 Severity discipline matters more than coverage. A review with one correct
@@ -181,11 +188,20 @@ Prefer the smallest diff that solves the problem.
 - Flag speculative abstraction, layers with a single implementation, and
   defensive wrappers around code that cannot fail.
 - Flag restructuring unrelated to the change's purpose.
+- Never propose refactors, renames, or rewrites outside the change. A proposed
+  fix must be the smallest change that addresses the finding.
 - Flag machine-written tells: comments narrating each line, redundant
   try/catch around code with no failure mode, boilerplate that does not match
   the conventions of the surrounding file, a test that asserts the
   implementation back to itself.
 - New code should look like the code already in the file.
+
+### Deliberate exceptions
+
+The hook understands an inline `review-ignore: <reason>` comment on the cited
+line or the line immediately above it. Report the finding anyway: the hook,
+not the reviewer, decides whether a marker in the base revision demotes it to
+WARN and prints the reason. A marker added by the diff is not yet trusted.
 
 <!-- PROJECT RULES -->
 

@@ -43,10 +43,11 @@ wanted() {
 	return 1
 }
 
-pass=0 fail=0
-while IFS=$'\t' read -r case_id expect cite; do
+pass=0 fail=0 block_total=0 block_caught=0 pass_total=0 false_positive=0
+while IFS=$'\t' read -r case_id expect cite description; do
 	case "$case_id" in ''|'#'*) continue ;; esac
 	wanted "$case_id" || continue
+	if [ "$expect" = BLOCK ]; then block_total=$((block_total + 1)); else pass_total=$((pass_total + 1)); fi
 	patch="$REGRESS_DIR/$case_id.patch"
 	[ -f "$patch" ] || { echo "FAIL $case_id: missing $patch"; fail=$((fail+1)); continue; }
 
@@ -79,7 +80,11 @@ while IFS=$'\t' read -r case_id expect cite; do
 			printf '%s' "$out" | grep -qF "$cite" || ok=0
 		else
 			# PASS with a required citation = an advisory WARN must be present.
-			printf '%s' "$out" | grep '^\[WARN\]' | grep -qF "$cite" || ok=0
+			oldifs="$IFS"; IFS='|'; all_warns=1
+			for required in $cite; do
+				printf '%s' "$out" | grep '^\[WARN\]' | grep -qF "$required" || all_warns=0
+			done
+			IFS="$oldifs"; [ "$all_warns" -eq 1 ] || ok=0
 		fi
 	fi
 	# A skipped review (reviewer down, contract violation) is a FAIL here even
@@ -90,8 +95,10 @@ while IFS=$'\t' read -r case_id expect cite; do
 	if [ "$ok" -eq 1 ]; then
 		echo "PASS $case_id ($verdict)"
 		pass=$((pass+1))
+		[ "$expect" = BLOCK ] && block_caught=$((block_caught + 1))
 	else
-		echo "FAIL $case_id: expected $expect${cite:+ citing '$cite'}, got $verdict"
+		[ "$expect" = PASS ] && false_positive=$((false_positive + 1))
+		echo "FAIL $case_id: expected $expect${cite:+ citing '$cite'}, got $verdict${description:+ — $description}"
 		printf '%s\n' "$out" | sed 's/^/    /'
 		fail=$((fail+1))
 	fi
@@ -102,6 +109,9 @@ done <"$EXPECTED"
 
 echo
 echo "regress: $pass passed, $fail failed"
+[ "$block_total" -eq 0 ] && catch_rate="n/a" || catch_rate="$block_caught/$block_total caught"
+[ "$pass_total" -eq 0 ] && fp_rate="n/a" || fp_rate="$false_positive/$pass_total false positives"
+echo "regress: BLOCK catch rate $catch_rate; PASS false-positive rate $fp_rate"
 
 # An unfiltered zero-failure run is the calibration event: pin the model the
 # expectations were just verified against. Filtered runs never touch the pin.

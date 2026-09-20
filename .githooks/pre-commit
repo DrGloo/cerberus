@@ -108,6 +108,7 @@ mkdir -p "$CACHE_DIR"
 DIFF_HASH="$( { cat "$TMP/diff" "$RUBRIC"; echo "$REVIEW_MODEL"; } | shasum -a 256 | cut -d' ' -f1)"
 CACHE_FILE="$CACHE_DIR/$DIFF_HASH"
 if [ -f "$CACHE_FILE" ]; then
+	review_apply_suppressions "$CACHE_FILE" "$TMP/diff" HEAD
 	if review_report "$CACHE_FILE"; then
 		echo "[review] PASS (cached for this exact diff)"
 		mark_reviewed
@@ -169,6 +170,8 @@ case "$rc" in
 		;;
 	*)   warn_and_pass "reviewer unavailable or returned an invalid response (exit $rc)" ;;
 esac
+
+review_apply_suppressions "$TMP/out" "$TMP/diff" HEAD
 
 # A verdict on a truncated diff is never cached: a cache hit would skip the
 # truncation branch below and attest on the second run what the first did not.

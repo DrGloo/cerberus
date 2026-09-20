@@ -34,6 +34,15 @@ REVIEW_EXTRA_IGNORE=
 #   REVIEW_LINT_CMD="shellcheck -S error"                      # shell
 REVIEW_LINT_CMD=
 
+# Names shown to the reviewer so lint-enforced style is out of scope.
+#   REVIEW_LINT_TOOLS="selene stylua"
+REVIEW_LINT_TOOLS=
+
+# ERE matched against changed paths and their current contents; matching files
+# receive full prompt context even when only a few lines changed.
+#   REVIEW_CONTEXT_PATTERNS="OnServerEvent|wrapInvoke"
+REVIEW_CONTEXT_PATTERNS=
+
 # Timeouts, in seconds. The base covers the first 60000 bytes of prompt;
 # every further 60000 bytes adds 90 seconds, capped at REVIEW_TIMEOUT_MAX.
 # A timeout fails open (the commit goes through, is ledgered, and is

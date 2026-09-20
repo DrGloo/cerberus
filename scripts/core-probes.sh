@@ -169,6 +169,61 @@ grep -qx "\[review\] note: review.conf line 3 ignored: $(printf 'x%.0s' $(seq 1 
 unlink "$CONF"
 load is REVIEW_MODEL claude-sonnet-5 && quiet && ok "a missing review.conf is silent and leaves the defaults" || bad "missing file"
 
+# --- prompt context and suppression ------------------------------------------
+P="$S/prompt-repo"
+mkdir -p "$P/src"
+(cd "$P" && git init -q && git config user.email probe@example.com && git config user.name probe &&
+	printf '%s\n' 'function wrapInvoke(value)' ' return value' 'end' >src/Handler.lua &&
+	git add . && git commit -qm base)
+printf '%s\n' 'diff --git a/src/Handler.lua b/src/Handler.lua' '--- a/src/Handler.lua' '+++ b/src/Handler.lua' '@@ -1,3 +1,4 @@' ' function wrapInvoke(value)' ' return value' 'end' '+-- changed' >"$S/diff"
+printf '%s\n' src/Handler.lua >"$S/paths"
+: >"$S/deleted"
+printf '%s\n' '## Untrusted content' >"$S/rubric"
+(cd "$P" && REVIEW_CONTEXT_PATTERNS='Handler.lua' REVIEW_LINT_TOOLS='selene stylua' REVIEW_HOOK_DIR="$H"; export REVIEW_CONTEXT_PATTERNS REVIEW_LINT_TOOLS REVIEW_HOOK_DIR; . "$H/lib/review-core.sh"; review_build_prompt "$S/diff" "$S/paths" "$S/deleted" "$S/rubric" staged 'git show HEAD:' HEAD "$S/prompt")
+grep -q -- '---- FULL CURRENT CONTENTS: src/Handler.lua' "$S/prompt" && ok "pattern-matched file is attached in full" || bad "pattern context attachment"
+(cd "$R" && REVIEW_LINT_TOOLS='selene stylua' REVIEW_HOOK_DIR="$R/.githooks"; export REVIEW_LINT_TOOLS REVIEW_HOOK_DIR; . "$R/.githooks/lib/review-core.sh"; review_rubric_file "$R/.githooks" "$S/rubric-built")
+grep -q 'selene stylua' "$S/rubric-built" && ok "configured lint tools appear in the rubric" || bad "pattern context/rubric injection"
+
+printf '%s\n' 'function validateAmount(value)' ' return value > 0' 'end' >"$P/src/Validator.lua"
+printf '%s\n' 'return validateAmount(amount)' >"$P/src/Caller.lua"
+(cd "$P" && git add . && git commit -qm callee)
+printf '%s\n' 'diff --git a/src/Caller.lua b/src/Caller.lua' '--- a/src/Caller.lua' '+++ b/src/Caller.lua' '@@ -0,0 +1 @@' '+return validateAmount(amount)' >"$S/callee.diff"
+printf '%s\n' src/Caller.lua >"$S/callee.paths"
+(cd "$P" && REVIEW_CONTEXT_PATTERNS='' REVIEW_LINT_TOOLS='' REVIEW_HOOK_DIR="$H"; export REVIEW_CONTEXT_PATTERNS REVIEW_LINT_TOOLS REVIEW_HOOK_DIR; . "$H/lib/review-core.sh"; review_build_prompt "$S/callee.diff" "$S/callee.paths" "$S/deleted" "$S/rubric" staged 'git show HEAD:' HEAD "$S/callee.prompt")
+grep -q -- '---- CALLEE: validateAmount ----' "$S/callee.prompt" && ok "cross-file callee definition appears in the prompt" || bad "callee context"
+
+printf '%s\n' '-- review-ignore: intentional' old >"$P/src/Marker.lua"
+(cd "$P" && git add . && git commit -qm marker)
+printf '%s\n' '-- review-ignore: intentional' new >"$P/src/Marker.lua"
+(cd "$P" && git add . && git diff --cached >"$S/marker.diff")
+printf '%s\n' '[BLOCKER] src/Marker.lua:2 - defect' '  why: x' '  fix: y' 'VERDICT: BLOCK' >"$S/marker.out"
+(cd "$P" && . "$H/lib/review-core.sh"; review_apply_suppressions "$S/marker.out" "$S/marker.diff" HEAD)
+grep -q '^\[WARN\].*intentional' "$S/marker.out" && grep -q '^VERDICT: PASS$' "$S/marker.out" && ok "base marker demotes a blocker with its reason" || bad "base suppression"
+
+printf '%s\n' old >"$P/src/Marker.lua"
+(cd "$P" && git add . && git commit -qm no-marker)
+printf '%s\n' '-- review-ignore: same diff' broken >"$P/src/Marker.lua"
+(cd "$P" && git add . && git diff --cached >"$S/marker-new.diff")
+printf '%s\n' '[BLOCKER] src/Marker.lua:2 - defect' '  why: x' '  fix: y' 'VERDICT: BLOCK' >"$S/marker-new.out"
+(cd "$P" && . "$H/lib/review-core.sh"; review_apply_suppressions "$S/marker-new.out" "$S/marker-new.diff" HEAD)
+grep -q '^\[BLOCKER\]' "$S/marker-new.out" && grep -q 'takes effect only' "$S/marker-new.out" && ok "same-diff marker keeps the blocker and warns" || bad "same-diff suppression"
+
+printf '%s\n' '-- review-ignore: too far' one two three four >"$P/src/Far.lua"
+(cd "$P" && git add . && git commit -qm far-marker)
+printf '%s\n' '-- review-ignore: too far' one two three changed >"$P/src/Far.lua"
+(cd "$P" && git add . && git diff --cached >"$S/far.diff")
+printf '%s\n' '[BLOCKER] src/Far.lua:4 - defect' '  why: x' '  fix: y' 'VERDICT: BLOCK' >"$S/far.out"
+(cd "$P" && . "$H/lib/review-core.sh"; review_apply_suppressions "$S/far.out" "$S/far.diff" HEAD)
+grep -q '^\[BLOCKER\]' "$S/far.out" && ! grep -q 'too far' "$S/far.out" && ok "marker three lines away does not suppress" || bad "distant suppression"
+
+printf '%s\n' '-- review-ignore:' old >"$P/src/Bare.lua"
+(cd "$P" && git add . && git commit -qm bare-marker)
+printf '%s\n' '-- review-ignore:' new >"$P/src/Bare.lua"
+(cd "$P" && git add . && git diff --cached >"$S/bare.diff")
+printf '%s\n' '[BLOCKER] src/Bare.lua:2 - defect' '  why: x' '  fix: y' 'VERDICT: BLOCK' >"$S/bare.out"
+(cd "$P" && . "$H/lib/review-core.sh"; review_apply_suppressions "$S/bare.out" "$S/bare.diff" HEAD)
+grep -q '^\[BLOCKER\]' "$S/bare.out" && grep -q 'requires a reason' "$S/bare.out" && ok "bare marker warns and keeps the finding" || bad "bare suppression"
+
 # --- the suite does not inherit the caller's environment ---------------------
 # Run a nested copy with junk exported; it must pass exactly as this one did.
 if [ -z "${CORE_PROBES_NESTED:-}" ]; then

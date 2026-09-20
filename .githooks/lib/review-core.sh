@@ -12,7 +12,7 @@
 # below on purpose: a default assigned first would win over the file.
 # Environment values set by the caller beat the file because the loader
 # skips any key that is already set.
-REVIEW_CONF_KEYS="REVIEW_MODEL REVIEW_SOURCE_DIRS REVIEW_EXTRA_IGNORE REVIEW_LINT_CMD REVIEW_TIMEOUT REVIEW_TIMEOUT_MAX REVIEW_CONTEXT_THRESHOLD REVIEW_MAX_DIFF_BYTES REVIEW_MAX_CONTEXT_BYTES"
+REVIEW_CONF_KEYS="REVIEW_MODEL REVIEW_SOURCE_DIRS REVIEW_EXTRA_IGNORE REVIEW_LINT_CMD REVIEW_LINT_TOOLS REVIEW_CONTEXT_PATTERNS REVIEW_TIMEOUT REVIEW_TIMEOUT_MAX REVIEW_CONTEXT_THRESHOLD REVIEW_MAX_DIFF_BYTES REVIEW_MAX_CONTEXT_BYTES"
 
 # review_load_conf <file>: assign the allowlisted keys from a KEY=VALUE file.
 # Blank lines and `#` comments are skipped silently. Every other line that is
@@ -114,6 +114,9 @@ REVIEW_EXTRA_IGNORE="${REVIEW_EXTRA_IGNORE:-}"
 # `$REVIEW_LINT_CMD <file>...` from the repo root; a non-zero exit blocks the
 # commit. Empty disables the step.
 REVIEW_LINT_CMD="${REVIEW_LINT_CMD:-}"
+REVIEW_LINT_TOOLS="${REVIEW_LINT_TOOLS:-}"
+# ERE matched against each changed path and its current contents.
+REVIEW_CONTEXT_PATTERNS="${REVIEW_CONTEXT_PATTERNS:-}"
 
 # Paths that are lockfiles, generated code, assets, or vendored third-party.
 # A diff touching only these is not worth a review pass.
@@ -185,7 +188,7 @@ review_deleted_refs() {
 	# language: `Foo.lua`, `foo.py`, `foo.ts` are all referenced as `foo`.
 	base="${base%.*}"
 	# Escape ERE metacharacters: a module named `Foo.v2` must match itself.
-	base="$(printf '%s' "$base" | sed -E 's/[][.*+?^${}()|\\]/\\&/g')"
+	base="$(printf '%s' "$base" | sed -E 's/[][\\.^$*+?(){}|]/\\&/g')"
 	# git grep -E is POSIX ERE: no \b. Spell out the word boundary.
 	review_grep_tree "(^|[^A-Za-z0-9_])${base}([^A-Za-z0-9_]|\$)" "$tree" | head -20
 }
@@ -280,7 +283,10 @@ review_label() {
 #   A project file with no marker in the rubric is appended instead, which
 #   still works but puts house rules after the contract; keep the marker.
 review_rubric_file() {
-	local hook_dir="$1" out="$2" generic="$1/review-rubric.md" project="$1/review-rubric.project.md"
+	local hook_dir="$1" out="$2" generic project assembled
+	generic="$hook_dir/review-rubric.md"
+	project="$hook_dir/review-rubric.project.md"
+	assembled="${out}.assembled"
 	if [ -f "$project" ] && grep -q '<!-- PROJECT RULES -->' "$generic"; then
 		awk -v project="$project" '
 			/<!-- PROJECT RULES -->/ {
@@ -289,12 +295,22 @@ review_rubric_file() {
 				next
 			}
 			{ print }
-		' "$generic" >"$out"
+		' "$generic" >"$assembled"
 	elif [ -f "$project" ]; then
-		cat "$generic" "$project" >"$out"
+		cat "$generic" "$project" >"$assembled"
 	else
-		cat "$generic" >"$out"
+		cat "$generic" >"$assembled"
 	fi
+	awk -v tools="$REVIEW_LINT_TOOLS" '
+		/^## Untrusted content/ {
+			print "## Not yours to review: configured tools"
+			if (tools != "") print "The configured lint/formatter tools are: " tools ". Do not report rules they enforce, including formatting, import order, checked naming conventions, or unused variables."
+			else print "No lint or formatter tools are configured. Formatting and style are out of scope regardless."
+			print ""
+		}
+		{ print }
+	' "$assembled" >"$out"
+	rm -f "$assembled"
 }
 
 # review_build_prompt <diff_file> <paths_file> <deleted_paths_file> <rubric_file> <mode_label> <show_cmd> <grep_tree> <out_prompt_file>
@@ -323,12 +339,19 @@ review_build_prompt() {
 		cat "$rubric"
 		printf -- '\n---- END RUBRIC ----\n\n'
 
-		local path count size tmpfull
+		local path count size tmpfull force_full current_text
 		local attach_budget="$REVIEW_MAX_CONTEXT_BYTES"
 		while IFS= read -r path; do
 			[ -n "$path" ] || continue
 			count="$(review_changed_line_count "$diff_file" "$path")"
-			if [ "$count" -gt "$REVIEW_CONTEXT_THRESHOLD" ]; then
+			force_full=0
+			if [ -n "$REVIEW_CONTEXT_PATTERNS" ]; then
+				current_text="$(${show_prefix}"$path" 2>/dev/null || true)"
+				if printf '%s\n%s\n' "$path" "$current_text" | grep -qE "$REVIEW_CONTEXT_PATTERNS"; then
+					force_full=1
+				fi
+			fi
+			if [ "$count" -gt "$REVIEW_CONTEXT_THRESHOLD" ] || [ "$force_full" -eq 1 ]; then
 				tmpfull="$(mktemp "${TMPDIR:-/tmp}/review-full.XXXXXX")"
 				${show_prefix}"$path" 2>/dev/null | awk '{ printf "%d\t%s\n", NR, $0 }' >"$tmpfull"
 				size="$(wc -c <"$tmpfull" | tr -d ' ')"
@@ -346,6 +369,30 @@ review_build_prompt() {
 				rm -f "$tmpfull"
 			fi
 		done < "$paths_file"
+
+			# Definitions of identifiers called by added lines. This is capped and
+			# shares the attachment budget with full-file context.
+			local callee_names callee hit callee_file callee_line callee_end
+			callee_names="$(grep '^+' "$diff_file" | grep -v '^+++' | grep -Eo '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' | sed -E 's/[[:space:]]*\($//' | grep -vE '^(if|for|while|switch|catch|return|else|elseif|elif|unless|until|when|function|def|func|fn|local|require)$' | sort -u | head -8)"
+			for callee in $callee_names; do
+				hit="$(review_grep_tree "$(review_definition_regex)" "$grep_tree" | grep -E ":[^:]*:.*(^|[^A-Za-z0-9_])${callee}[[:space:]]*\(" | head -1)"
+				[ -n "$hit" ] || continue
+				case "$hit" in "$grep_tree":*) hit="${hit#"$grep_tree":}" ;; esac
+				callee_file="${hit%%:*}"
+				callee_line="${hit#*:}"
+				callee_line="${callee_line%%:*}"
+				callee_end=$((callee_line + 5))
+				tmpfull="$(mktemp "${TMPDIR:-/tmp}/review-callee.XXXXXX")"
+				${show_prefix}"$callee_file" 2>/dev/null | sed -n "${callee_line},${callee_end}p" | awk '{ printf "%d\t%s\n", NR, $0 }' >"$tmpfull"
+				size="$(wc -c <"$tmpfull" | tr -d ' ')"
+				if [ "$size" -le "$attach_budget" ]; then
+					attach_budget=$((attach_budget - size))
+					printf -- '---- CALLEE: %s ----\n' "$(review_label "$callee")"
+					review_untrusted <"$tmpfull"
+					printf -- '---- END ----\n\n'
+				fi
+				rm -f "$tmpfull"
+			done
 
 		# Call sites for functions the diff touches — both definitions whose
 		# line changed and the enclosing function of every hunk (a changed
@@ -487,6 +534,110 @@ review_output_is_valid() {
 	# failed OPEN and ledgered an escape for a review that had actually
 	# passed. It is noise, not a broken contract; review_report drops it.
 	return 0
+}
+
+# review_apply_suppressions <output> <diff> <base-revision>
+# Markers are read only from the base revision. Added markers are reported as
+# warnings, but cannot clear a blocker in the diff that introduced them.
+review_apply_suppressions() {
+	local out="$1" diff_file="$2" base="$3" map markers tmp line finding path number old_line candidate base_line reason marker_key fpath fline marker_reason verdict
+	local blocked=0 warnings="${out}.warnings"
+	map="$(mktemp "${TMPDIR:-/tmp}/review-map.XXXXXX")"
+	markers="$(mktemp "${TMPDIR:-/tmp}/review-markers.XXXXXX")"
+	tmp="$(mktemp "${TMPDIR:-/tmp}/review-suppressed.XXXXXX")"
+	: >"$warnings"
+	awk '
+		/^diff --git / { path=$4; sub(/^b\//, "", path); old=0; new=0; in_hunk=0; next }
+		/^@@/ {
+			old=$0; match(old, /-[0-9]+/); old=substr(old, RSTART + 1, RLENGTH - 1)
+			new=$0; match(new, /\+[0-9]+/); new=substr(new, RSTART + 1, RLENGTH - 1); in_hunk=1; next
+		}
+		in_hunk && /^\+\+\+/ { next }
+		in_hunk && /^\+/ { print path "\t" new "\t" old; if (index($0, "review-ignore:") > 0) print "M\t" path "\t" new "\t" $0 > markers; new++; next }
+		in_hunk && /^-/ { old++; next }
+		in_hunk { new++; old++ }
+	' markers="$markers" "$diff_file" >"$map"
+
+	while IFS= read -r line; do
+		case "$line" in
+			VERDICT:*)
+				if [ "$blocked" -eq 1 ]; then printf 'VERDICT: BLOCK\n' >>"$tmp"; else printf 'VERDICT: PASS\n' >>"$tmp"; fi
+				cat "$warnings" >>"$tmp"
+				;;
+			\[BLOCKER\]*|\[WARN\]*|\[NIT\]*)
+				finding="$(printf '%s\n' "$line" | sed -nE 's/^\[(BLOCKER|WARN|NIT)\] ([^:]+):([0-9]+).*/\1\t\2\t\3/p')"
+				if [ -z "$finding" ]; then
+					printf '%s\n' "$line" >>"$tmp"
+					continue
+				fi
+				severity="$(printf '%s\n' "$finding" | cut -f1)"
+				path="$(printf '%s\n' "$finding" | cut -f2)"
+				number="$(printf '%s\n' "$finding" | cut -f3)"
+				old_line="$number"
+				reason=""
+				for candidate in "$old_line" $((old_line - 1)); do
+					[ "$candidate" -gt 0 ] || continue
+					base_line="$(git show "$base:$path" 2>/dev/null | sed -n "${candidate}p")"
+					if printf '%s\n' "$base_line" | grep -q 'review-ignore:'; then
+							reason="$(printf '%s\n' "$base_line" | sed -nE 's/.*review-ignore:[[:space:]]*(.*)$/\1/p' | sed -E 's/[[:space:]]+$//')"
+							if [ -n "$reason" ]; then
+								severity="WARN"
+								line="$line [review-ignore: $reason]"
+							else
+								printf '[WARN] %s:%s — review-ignore marker requires a reason\n  why:  the marker cannot suppress a finding without an explanation\n  fix:  add a reason after review-ignore:\n' "$path" "$candidate" >>"$warnings"
+							fi
+							break
+						fi
+				done
+				if [ "$severity" = "BLOCKER" ]; then blocked=1; fi
+				printf '%s\n' "$(printf '%s' "$line" | sed -E "s/^\[(BLOCKER|WARN|NIT)\]/[$severity]/")" >>"$tmp"
+				;;
+			*) printf '%s\n' "$line" >>"$tmp" ;;
+		esac
+	done <"$out"
+
+	# Same-diff markers never suppress; add one warning for each relevant marker.
+	while IFS= read -r marker_line; do
+		marker_key="$(printf '%s\n' "$marker_line" | cut -f1)"
+		path="$(printf '%s\n' "$marker_line" | cut -f2)"
+		number="$(printf '%s\n' "$marker_line" | cut -f3)"
+		line="$(printf '%s\n' "$marker_line" | cut -f4-)"
+		[ "$marker_key" = M ] || continue
+		while IFS= read -r finding; do
+			[ -n "$finding" ] || continue
+			fpath="$(printf '%s\n' "$finding" | sed -nE 's/^\[(BLOCKER|WARN|NIT)\] ([^:]+):([0-9]+).*/\2/p')"
+			fline="$(printf '%s\n' "$finding" | sed -nE 's/^\[(BLOCKER|WARN|NIT)\] ([^:]+):([0-9]+).*/\3/p')"
+			[ "$fpath" = "$path" ] || continue
+			[ "$fline" -eq "$number" ] 2>/dev/null || [ "$fline" -eq $((number + 1)) ] 2>/dev/null || continue
+			marker_reason="$(printf '%s\n' "$line" | sed -nE 's/.*review-ignore:[[:space:]]*(.*)$/\1/p' | sed -E 's/[[:space:]]+$//')"
+			if [ -n "$marker_reason" ]; then
+				printf '[WARN] %s:%s — review-ignore marker takes effect only after it has been reviewed in\n  why:  the marker was added by the diff under review\n  fix:  review and commit the marker before relying on it\n' "$path" "$number" >>"$warnings"
+			else
+				printf '[WARN] %s:%s — review-ignore marker requires a reason\n  why:  the marker cannot suppress a finding without an explanation\n  fix:  add a reason after review-ignore:\n' "$path" "$number" >>"$warnings"
+			fi
+			done <"$out"
+	done <"$markers"
+
+	# Warnings must appear before the verdict; rebuild once with the warnings in
+	# their contractual position and recompute BLOCK from the final findings.
+	awk '
+		/^VERDICT:/ { next }
+		{ print }
+	' "$tmp" >"${tmp}.body"
+	if grep -q '^\[BLOCKER\]' "${tmp}.body"; then verdict=BLOCK; else verdict=PASS; fi
+	awk -v verdict="$verdict" '
+		/^VERDICT:/ { next }
+		{ print }
+		END { print "VERDICT: " verdict }
+	' "${tmp}.body" >"$out"
+	cat "$warnings" >>"$out"
+	# Keep the verdict last after appending warnings.
+	awk '
+		/^VERDICT:/ { verdict=$0; next }
+		{ print }
+		END { if (verdict != "") print verdict }
+	' "$out" >"${out}.clean" && mv "${out}.clean" "$out"
+	rm -f "$map" "$markers" "$tmp" "${tmp}.body" "$warnings"
 }
 
 # The reviewer must judge exactly the prompt we built, identically on every
