@@ -9,7 +9,6 @@ Rojo. It is included as a worked example of the three project-specific pieces.
 | `review.conf` | `.githooks/review.conf` | Source roots, ignore globs, and a `selene` lint step. |
 | `review-rubric.project.md` | `.githooks/review-rubric.project.md` | House rules: lifecycle owners by name, the persistence module and its schema rule, the validation wrapper every remote must use, vendored directories, and severity calibrations. |
 | `regress/` | `.githooks/regress/` | Fifteen seeded-defect fixtures with expected verdicts, and the model they were last calibrated against. |
-| `review-rubric.md` | (reference only) | The original single-file rubric before the generic/project split, kept so the split can be compared against it. |
 
 ## What the fixtures cover
 

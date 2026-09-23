@@ -4,6 +4,11 @@ name: Hook self-checks
 # push time through the developer's authenticated `claude` CLI, so this
 # workflow needs no secrets. It checks that the hooks are well-formed and
 # that the guard and backstop invariants still hold.
+#
+# The same file runs in the Cerberus repository and, installed, in a target:
+# the file list comes from MANIFEST (the source copy at the root, the
+# installed copy under .githooks/), and the source-only scripts are checked
+# when present.
 on:
   pull_request:
   push:
@@ -15,30 +20,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: List the shell files
+        run: |
+          m=MANIFEST; [ -f "$m" ] || m=.githooks/MANIFEST
+          while read -r kind path src; do
+            case "$kind" in
+              hook|script|probe) echo "$path" ;;
+              lib) case "$path" in *.sh) echo "$path" ;; esac ;;
+            esac
+          done <"$m" >"$RUNNER_TEMP/shell-files"
+          for f in install.sh selftest.sh; do [ -f "$f" ] && echo "$f"; done >>"$RUNNER_TEMP/shell-files"
+          while read -r kind path src; do
+            [ "$kind" = hook ] && echo "$path"
+          done <"$m" >"$RUNNER_TEMP/hook-files"
+          cat "$RUNNER_TEMP/shell-files"
       - name: Syntax-check every script
         run: |
-          for f in .githooks/pre-commit .githooks/post-commit .githooks/pre-push \
-                   .githooks/lib/review-core.sh .githooks/lib/no-bypass-guard.sh \
-                   scripts/review.sh scripts/review-regress.sh \
-                   scripts/guard-probes.sh scripts/backstop-probes.sh \
-                   install.sh selftest.sh; do
-            bash -n "$f" && echo "OK $f"
-          done
+          while read -r f; do bash -n "$f" && echo "OK $f" || exit 1; done <"$RUNNER_TEMP/shell-files"
       - name: Hooks are executable
         run: |
-          for f in .githooks/pre-commit .githooks/post-commit .githooks/pre-push .githooks/lib/no-bypass-guard.sh install.sh selftest.sh; do
+          while read -r f; do
             [ -x "$f" ] || { echo "NOT EXECUTABLE: $f (git ignores a non-executable hook)"; exit 1; }
-          done
+          done <"$RUNNER_TEMP/hook-files"
       - name: shellcheck
         run: |
           sudo apt-get install -y -qq shellcheck >/dev/null
-          shellcheck -S error .githooks/pre-commit .githooks/post-commit .githooks/pre-push \
-            .githooks/lib/review-core.sh .githooks/lib/no-bypass-guard.sh \
-            scripts/review.sh scripts/review-regress.sh scripts/guard-probes.sh \
-            scripts/backstop-probes.sh install.sh selftest.sh
+          xargs shellcheck -S error <"$RUNNER_TEMP/shell-files"
       - name: Guard probes
         run: bash scripts/guard-probes.sh
       - name: Backstop probes
         run: bash scripts/backstop-probes.sh
+      - name: Core probes
+        run: bash scripts/core-probes.sh
       - name: Install self-test (no model)
+        if: hashFiles('selftest.sh') != ''
         run: bash selftest.sh

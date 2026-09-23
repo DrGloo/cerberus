@@ -1,16 +1,16 @@
 ## 1. Deletions and dead code
 
-- [ ] 1.1 Delete `examples/roblox-luau/review-rubric.md`, `templates/claude-settings.json`, `templates/github-workflow-review.yml`; `install.sh` reads the repository's own settings and workflow; the workflow's selftest step is conditional on the file existing
+- [x] 1.1 Delete `examples/roblox-luau/review-rubric.md`, `templates/claude-settings.json`, `templates/github-workflow-review.yml`; `install.sh` reads the repository's own settings and workflow; the workflow's selftest step is conditional on the file existing
 - [ ] 1.2 `review-regress.sh`: drop the second `REVIEW_TIMEOUT` default; `pre-commit`: collapse the two attestation comments into one; drop the "SonarQube-style" header
 - [ ] 1.3 `review-core.sh`: Roblox-specific ignore patterns move to `examples/roblox-luau/review.conf`
-- [ ] 1.4 README: probe counts removed; configuration table replaced by a link to `review.conf.example`
+- [x] 1.4 README: probe counts removed; configuration table replaced by a link to `review.conf.example`
 
 ## 2. Manifest and version
 
-- [ ] 2.1 `MANIFEST` with kinds; `install.sh` copies from it, stamps `VERSION`, refuses a plain re-install naming both versions, `--upgrade` replaces manifest paths only
-- [ ] 2.2 Workflows and `selftest.sh` read the manifest for syntax and exec checks
+- [x] 2.1 `MANIFEST` with kinds; `install.sh` copies from it, stamps `VERSION`, refuses a plain re-install naming both versions, `--upgrade` replaces manifest paths only
+- [x] 2.2 Workflows and `selftest.sh` read the manifest for syntax and exec checks
 - [ ] 2.3 `guard-probes.sh`: manifest sweep asserting every protected kind is refused as a write target
-- [ ] 2.4 `VERSION` 0.2.0 and a `CHANGELOG.md` with the entries for the three changes
+- [x] 2.4 `VERSION` 0.2.0 and a `CHANGELOG.md` with the entries for the three changes
 
 ## 3. Probe harness
 

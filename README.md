@@ -30,11 +30,16 @@ by what went wrong in practice.
 scripts/
   review.sh                   the same review over a branch or any range, for a PR
   review-regress.sh           replays the fixtures through the real hook and checks verdicts
-  guard-probes.sh             83 probes of the agent guard, no model, sub-second
-  backstop-probes.sh          22 probes of the ledger, attestation, re-review and timeout logic, no model
-install.sh                    copies all of the above into a repository and wires it up
+  guard-probes.sh             probes of the agent guard, no model, sub-second
+  backstop-probes.sh          probes of the ledger, attestation, re-review and timeout logic, no model
+  core-probes.sh              probes of the review-core.sh library functions
+.claude/settings.json         registers the agent guard with Claude Code
+.github/workflows/review.yml  CI: syntax, shellcheck and every probe suite, no secrets
+MANIFEST                      every installed path and its kind; the one file list
+VERSION, CHANGELOG.md         stamped on install; --upgrade prints what changed
+install.sh                    copies the manifest into a repository and wires it up
 selftest.sh                   installs into a throwaway repo and runs every probe suite
-templates/                    the agent guard registration and a CI workflow
+templates/                    the project rubric starting point
 examples/                     a runnable sample project with fixtures, and the original Roblox setup
 ```
 
@@ -49,10 +54,11 @@ git clone https://github.com/<you>/cerberus
 bash cerberus/install.sh /path/to/your/repo
 ```
 
-That copies the hook directory and the scripts, sets `core.hooksPath` for that
-clone, registers the agent guard in `.claude/settings.json` (merging if the
-file exists), and creates `review.conf` and `review-rubric.project.md` from
-the templates. Then:
+That copies every path in `MANIFEST`, stamps `.githooks/VERSION`, sets
+`core.hooksPath` for that clone, registers the agent guard in
+`.claude/settings.json` (merging if the file exists), and creates
+`review.conf`, `review-rubric.project.md`, `regress/expected.tsv` and the CI
+workflow when they are absent. Then:
 
 1. Edit `.githooks/review.conf`: the model, the directories the reviewer
    should search for callers, extra ignore globs, and an optional lint command
@@ -61,9 +67,9 @@ the templates. Then:
    its keep: name the lifecycle owner every resource must register with, the
    persistence module and what must never be renamed, the validation wrapper
    every entry point must use. See `examples/roblox-luau/` for a real one.
-3. Commit `.githooks/`, `scripts/` and `.claude/settings.json`. Every clone
-   gets the files; every clone still runs the `core.hooksPath` line once,
-   which `install.sh` prints.
+3. Commit `.githooks/`, `scripts/`, `.claude/settings.json` and
+   `.github/workflows/review.yml`. Every clone gets the files; every clone
+   still runs the `core.hooksPath` line once, which `install.sh` prints.
 4. `bash scripts/guard-probes.sh && bash scripts/backstop-probes.sh`.
 
 ## How a commit is reviewed
@@ -168,19 +174,33 @@ selftest.sh` runs them end to end.
 
 ## Tuning
 
-Every knob is a `REVIEW_*` key in `.githooks/review.conf`;
-`.githooks/review.conf.example` lists them all with their defaults and what
-they mean. The file is data, not shell: one `KEY=VALUE` per line, quotes
+Every knob is a `REVIEW_*` key in `.githooks/review.conf`.
+[`review.conf.example`](.githooks/review.conf.example) is the reference: it
+lists each one with its default and what it means. The file is data, not shell: one `KEY=VALUE` per line, quotes
 around the value optional, no variables or command substitution (a line
 that tries is reported and skipped), and a value set in the environment
 (`REVIEW_MODEL=... git commit`) wins over the file.
 
 ## CI
 
-`templates/github-workflow-review.yml` syntax-checks the hooks, verifies they
-are executable, and runs both probe suites on every pull request. It needs no
+`.github/workflows/review.yml`, created in the target on install,
+syntax-checks and shellchecks every script in the manifest, verifies the hooks
+are executable, and runs the probe suites on every pull request (and
+`selftest.sh`, where it exists). It needs no
 secrets because it makes no model call: the AI review runs locally, through
 the developer's own authenticated CLI, by design.
+
+## Upgrading
+
+```
+bash cerberus/install.sh --upgrade /path/to/your/repo
+```
+
+replaces the hook, library, script and probe files from `MANIFEST`, keeps
+everything you wrote (`review.conf`, the project rubric, the regress suite,
+the workflow), and prints the `CHANGELOG.md` entries since the installed
+version. A plain `install.sh` over an existing install refuses and names both
+versions.
 
 ## Development
 

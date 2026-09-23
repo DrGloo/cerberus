@@ -1,0 +1,32 @@
+# Every path install.sh puts into a target repository, one per line:
+#   <kind> <path in the target> [<source path here, when it differs>]
+#
+#   hook      executable; git or Claude Code runs it directly
+#   lib       sourced or read by the hooks
+#   script    run by hand or by a hook
+#   probe     a probe suite or its library
+#   settings  merged into an existing file, never replaced
+#   seed      created when absent, never overwritten; yours to edit
+#
+# hook, lib, script, probe and settings paths are protected by the agent
+# guard; scripts/guard-probes.sh fails if one is not. Read with
+#   while read -r kind path src; do ...; done
+hook     .githooks/pre-commit
+hook     .githooks/post-commit
+hook     .githooks/pre-push
+hook     .githooks/lib/no-bypass-guard.sh
+lib      .githooks/lib/review-core.sh
+lib      .githooks/review-rubric.md
+lib      .githooks/review.conf.example
+lib      .githooks/MANIFEST                  MANIFEST
+lib      .githooks/VERSION                   VERSION
+script   scripts/review.sh
+script   scripts/review-regress.sh
+probe    scripts/guard-probes.sh
+probe    scripts/backstop-probes.sh
+probe    scripts/core-probes.sh
+settings .claude/settings.json
+seed     .githooks/review.conf               .githooks/review.conf.example
+seed     .githooks/review-rubric.project.md  templates/review-rubric.project.md
+seed     .githooks/regress/expected.tsv
+seed     .github/workflows/review.yml

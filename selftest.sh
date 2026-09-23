@@ -32,17 +32,59 @@ git -C "$REPO" "${GIT_ID[@]}" commit -q -m "sample project"
 out="$(bash "$ROOT/install.sh" "$REPO" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "install.sh exits 0"; else bad "install.sh (rc=$rc): $out"; fi
 
-for f in pre-commit post-commit pre-push lib/no-bypass-guard.sh; do
-	if [ -x "$REPO/$HOOKS/$f" ]; then ok "$f is executable"; else bad "$f is not executable"; fi
-done
+# Every manifest path arrives: hooks executable, seeds created, and nothing
+# under the hook and script directories that the manifest does not name.
+: >"$S/expected-files"
+while read -r kind path src; do
+	case "$kind" in ''|'#'*|settings) continue ;; esac
+	if [ ! -f "$REPO/$path" ]; then bad "$kind $path not installed"; continue; fi
+	[ "$kind" = hook ] && { [ -x "$REPO/$path" ] || bad "$path is not executable"; }
+	case "$path" in "$HOOKS"/*|scripts/*) echo "$path" >>"$S/expected-files" ;; esac
+done <"$ROOT/MANIFEST"
+(cd "$REPO" && find "$HOOKS" scripts -type f | LC_ALL=C sort) >"$S/installed-files"
+if LC_ALL=C sort "$S/expected-files" | cmp -s - "$S/installed-files"; then
+	ok "installed files match the manifest, hooks executable"
+else
+	bad "installed files differ from the manifest: $(LC_ALL=C sort "$S/expected-files" | diff - "$S/installed-files" | grep '^[<>]' | tr '\n' ' ')"
+fi
+[ "$(cat "$REPO/$HOOKS/VERSION")" = "$(cat "$ROOT/VERSION")" ] && ok "VERSION stamped into the hook directory" || bad "VERSION not stamped"
 [ "$(git -C "$REPO" config --get core.hooksPath)" = "$HOOKS" ] && ok "core.hooksPath points at the hook directory" || bad "core.hooksPath not set"
-[ -f "$REPO/$HOOKS/review.conf" ] && ok "review.conf created from the example" || bad "review.conf missing"
-[ -f "$REPO/$HOOKS/review-rubric.project.md" ] && ok "project rubric created from the template" || bad "project rubric missing"
-[ -f "$REPO/.claude/settings.json" ] && grep -q no-bypass-guard "$REPO/.claude/settings.json" && ok "agent guard registered" || bad "agent guard not registered"
+grep -q no-bypass-guard "$REPO/.claude/settings.json" 2>/dev/null && ok "agent guard registered" || bad "agent guard not registered"
 
-# A second install without --force must refuse and leave the files alone.
+# A second install without a flag must refuse, naming both versions.
+V="$(cat "$ROOT/VERSION")"
 out="$(bash "$ROOT/install.sh" "$REPO" 2>&1)"; rc=$?
-[ "$rc" -eq 1 ] && ok "second install refuses without --force" || bad "second install (rc=$rc): $out"
+[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q "installed: $V, this source: $V" && ok "second install refuses, naming both versions" || bad "second install (rc=$rc): $out"
+
+# --upgrade over an older install: manifest files replaced, seeds and the
+# target's own settings entries kept, the guard registered once, the
+# CHANGELOG printed.
+(
+	U="$S/upgrade"
+	SETTINGS="$U/.claude/settings.json"
+	git init -q "$U" && mkdir -p "$U/.claude" || exit 1
+	printf '%s\n' '{"permissions": {"allow": ["Bash(ls:*)"]}, "hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": []}]}}' >"$SETTINGS"
+	bash "$ROOT/install.sh" "$U" >/dev/null 2>&1 || exit 1
+	echo "0.1.0" >"$U/$HOOKS/VERSION"
+	echo "# stale" >"$U/$HOOKS/pre-commit"
+	echo "REVIEW_MODEL=mine" >"$U/$HOOKS/review.conf"
+	echo "mine" >"$U/$HOOKS/regress/expected.tsv"
+	out="$(bash "$ROOT/install.sh" "$U" 2>&1)"
+	printf '%s' "$out" | grep -q "installed: 0.1.0, this source: $V" || { echo "plain install over 0.1.0: $out"; exit 1; }
+	out="$(bash "$ROOT/install.sh" --upgrade "$U" 2>&1)" || { echo "upgrade: $out"; exit 1; }
+	printf '%s' "$out" | grep -q "0.1.0 -> $V" || { echo "no version line: $out"; exit 1; }
+	[ ! -f "$ROOT/CHANGELOG.md" ] || printf '%s' "$out" | grep -q "^## $V" || { echo "no changelog: $out"; exit 1; }
+	cmp -s "$ROOT/$HOOKS/pre-commit" "$U/$HOOKS/pre-commit" && [ -x "$U/$HOOKS/pre-commit" ] || { echo "pre-commit not replaced"; exit 1; }
+	[ "$(cat "$U/$HOOKS/VERSION")" = "$V" ] || { echo "VERSION not replaced"; exit 1; }
+	[ "$(cat "$U/$HOOKS/review.conf")" = "REVIEW_MODEL=mine" ] || { echo "review.conf overwritten"; exit 1; }
+	[ "$(cat "$U/$HOOKS/regress/expected.tsv")" = "mine" ] || { echo "expected.tsv overwritten"; exit 1; }
+	grep -q '"Bash(ls:\*)"' "$SETTINGS" && grep -q PostToolUse "$SETTINGS" || { echo "settings entries lost"; exit 1; }
+	# Without jq the merge is left to the user; with it, two entries (Bash and
+	# the file tools), not four.
+	if command -v jq >/dev/null 2>&1; then
+		[ "$(grep -c no-bypass-guard "$SETTINGS")" -eq 2 ] || { echo "guard not registered exactly once"; exit 1; }
+	fi
+) >"$S/upgrade.log" 2>&1 && ok "--upgrade replaces the manifest files, keeps seeds and settings, prints the changelog" || bad "--upgrade: $(cat "$S/upgrade.log")"
 
 # --- the rubric the reviewer would see ---------------------------------------
 (
