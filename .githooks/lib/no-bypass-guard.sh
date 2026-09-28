@@ -28,8 +28,8 @@
 # Accepted residual holes (a static shell inspector cannot close these; the
 # guard raises the cost of a bypass, it cannot make one impossible):
 #   - a script written by a non-Bash tool and executed in the same turn;
-#   - a program piped rather than named, to a shell or an interpreter on
-#     stdin: `cat w.sh | bash`, `bash < w.sh`, `python3 < w.py`;
+#   - code generated entirely at runtime and passed to an interpreter without
+#     naming a script path in the command;
 #   - a protected path reached through a symlink the guard has not seen (the
 #     path predicate is textual: `./` and `..` are folded, links are not);
 #   - the attestation key read through a path the guard does not recognise: a
@@ -45,6 +45,8 @@
 # because an external tool is missing. jq is optional; without it the raw JSON
 # payload is scanned — the command text is embedded in it verbatim (modulo
 # quote escaping, which no pattern below relies on).
+# This is a defense-in-depth command inspector, not a sandbox. Runtime-built
+# code and non-Bash execution paths must be constrained by the host environment.
 
 set -u
 
@@ -312,6 +314,13 @@ check_protected_writes() {
 # Hook-skipping and history-plumbing patterns — applied to the command AND to
 # invoked script contents.
 check_bypass_patterns() {
+	# A stdin-fed interpreter hides the script from the invoked-file scanner.
+	# Reject the common pipe and input-redirection forms rather than trying to
+	# infer which upstream command supplied executable code.
+	ci '[|][[:space:]]*([^[:space:];|&]*/)?(bash|sh|zsh|python[0-9.]*|perl|ruby|node|php|lua)([^[:alnum:]_]|$)' \
+		&& block "piping commands or files into an interpreter is not allowed for agents."
+	ci '(^|[;&[:space:]])([^[:space:];|&]*/)?(bash|sh|zsh|python[0-9.]*|perl|ruby|node|php|lua)[[:space:]][^;&|]*<[[:space:]]*[^-]' \
+		&& block "redirecting a file into an interpreter is not allowed for agents."
 	# --no-verify and its unambiguous prefixes.
 	ci '[-][-]no-verif' && block "committing with the git hook disabled is not allowed for agents."
 	ci 'review_?skip[[:space:]]*=' && block "committing with REVIEW_SKIP set is not allowed for agents."

@@ -32,7 +32,7 @@ t() {
 	note "$rc" "$1"
 }
 
-# Degraded path: guard runs with no jq (empty PATH) and must scan raw JSON.
+# Degraded path: guard runs without jq and scans the raw JSON payload.
 traw() {
 	local json rc=0
 	json="$(jq -cn --arg c "$1" '{tool_input:{command:$c}}')"
@@ -76,6 +76,9 @@ t 'git commit-tree HEAD^{tree} -m x'
 t 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hookspath GIT_CONFIG_VALUE_0=/dev/null git commit -m x'
 t 'git filter-branch --tree-filter "true" HEAD'
 t 'git fast-import < dump.fi'
+t 'cat script.sh | bash'
+t 'bash < script.sh'
+t 'python3 < script.py'
 
 # --- command-string probes: must ALLOW ---------------------------------------
 expect_allow
@@ -102,6 +105,7 @@ t 'echo "review skipped nothing" > /tmp/note.txt'
 expect_block
 traw 'git commit -m x --no-verify'
 traw 'REVIEW_SKIP=1 git commit'
+traw 'cat script.sh | bash'
 expect_allow
 traw 'git status'
 traw 'ls -la src'
@@ -345,34 +349,21 @@ traw "grep '\"file_path\"' x; git commit -m y $flag"
 # The list is read from install.sh in the Cerberus checkout; an installed
 # copy (selftest runs this suite inside a scratch install) has no install.sh
 # and falls back to the same list spelled here.
-M_HOOKS=".githooks"
-M_SCRIPTS="scripts"
-M_HOOK_FILES="pre-commit post-commit pre-push lib/review-core.sh lib/no-bypass-guard.sh review-rubric.md review.conf.example regress/expected.tsv"
-M_SCRIPT_FILES="review.sh review-regress.sh guard-probes.sh backstop-probes.sh"
-M_SETTINGS=".claude/settings.json"
-if [ -f "$ROOT_DIR/install.sh" ]; then
-	mf() { sed "s/^$1=\"\(.*\)\"\$/\1/p;d" "$ROOT_DIR/install.sh"; }
-	M_HOOKS="$(mf HOOKS)"
-	M_SCRIPTS="$(mf SCRIPTS)"
-	M_HOOK_FILES="$(mf HOOK_FILES)"
-	M_SCRIPT_FILES="$(mf SCRIPT_FILES)"
-	M_SETTINGS="$(mf GUARD_SETTINGS)"
-fi
-if [ -z "$M_HOOKS" ] || [ -z "$M_HOOK_FILES" ] || [ -z "$M_SCRIPT_FILES" ] || [ -z "$M_SETTINGS" ]; then
-	echo "MISMATCH :: could not read the install manifest from install.sh"
+manifest="$ROOT_DIR/MANIFEST"
+[ -f "$manifest" ] || manifest="$ROOT_DIR/.githooks/MANIFEST"
+if [ ! -f "$manifest" ]; then
+	echo "MISMATCH :: could not read MANIFEST"
 	fail=$((fail + 1))
 fi
 expect_block
-for f in $M_HOOK_FILES; do
-	tw "$M_HOOKS/$f" 'x'
-	t "echo x > $M_HOOKS/$f"
-done
-for f in $M_SCRIPT_FILES; do
-	tw "$M_SCRIPTS/$f" 'x'
-	t "echo x > $M_SCRIPTS/$f"
-done
-tw "$M_SETTINGS" 'x'
-t "echo x > $M_SETTINGS"
+while read -r kind path src; do
+	case "$kind" in
+		hook|lib|script|probe|settings)
+			tw "$path" 'x'
+			t "echo x > $path"
+			;;
+	esac
+done <"$manifest"
 
 # --- the existing verbs cover every protected path, not just the hooks ------
 expect_block

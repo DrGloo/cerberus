@@ -89,8 +89,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 		echo "[review] pre-push: reviewer unavailable or crashed — push allowed; commits stay unattested for the next push."
 	else
 		# shellcheck disable=SC2086
-		review_attest $commits
-		echo "[review] pre-push: '$label' re-reviewed clean — $unattested commit(s) attested."
+		if review_attest $commits; then
+			echo "[review] pre-push: '$label' re-reviewed clean — $unattested commit(s) attested."
+		else
+			echo "[review] pre-push: '$label' passed review but attestation could not be saved; commits remain unattested."
+		fi
 	fi
 done
 

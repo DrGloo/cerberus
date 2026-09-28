@@ -24,24 +24,30 @@ else
 	SHOW_REV="HEAD"
 fi
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/review.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/review.XXXXXX")" || {
+	echo "[review] WARNING: could not create a temporary review directory under ${TMPDIR:-/tmp}."
+	exit 0
+}
 trap 'rm -rf "$TMP"' EXIT
 
 RUBRIC="$TMP/rubric.md"
 review_rubric_file "$REVIEW_HOOK_DIR" "$RUBRIC"
 
-git diff --diff-filter=ACMR --name-only "$RANGE" | review_filter_paths >"$TMP/paths"
-git diff --diff-filter=D --name-only "$RANGE" | review_filter_paths >"$TMP/deleted"
+git diff --diff-filter=ACMR --name-only -z "$RANGE" | review_filter_paths_z >"$TMP/paths"
+git diff --diff-filter=D --name-only -z "$RANGE" | review_filter_paths_z >"$TMP/deleted"
 if [ ! -s "$TMP/paths" ] && [ ! -s "$TMP/deleted" ]; then
 	echo "[review] nothing reviewable in $LABEL."
 	exit 0
 fi
 
 paths=()
-while IFS= read -r p; do paths+=("$p"); done <"$TMP/paths"
-while IFS= read -r p; do paths+=("$p"); done <"$TMP/deleted"
+while IFS= read -r -d '' path; do paths+=("$path"); done <"$TMP/paths"
+while IFS= read -r -d '' path; do paths+=("$path"); done <"$TMP/deleted"
 git diff --unified=8 --diff-filter=ACMRD "$RANGE" -- "${paths[@]}" >"$TMP/diff"
-[ -s "$TMP/diff" ] || exit 0
+if [ ! -s "$TMP/diff" ]; then
+	echo "[review] WARNING: reviewable paths in $LABEL produced an empty diff; nothing attested."
+	exit 0
+fi
 
 review_build_prompt "$TMP/diff" "$TMP/paths" "$TMP/deleted" "$RUBRIC" "$LABEL" "git show $SHOW_REV:" "$SHOW_REV" "$TMP/prompt"
 

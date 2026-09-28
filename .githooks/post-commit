@@ -2,31 +2,45 @@
 # Post-commit half of the attestation handshake (see pre-commit).
 #
 # pre-commit cannot know the sha of a commit that does not exist yet, so on a
-# PASS it leaves the staged tree id in `pending-attest`. This hook runs once
-# the commit exists: if HEAD's tree matches, the commit is recorded as
-# reviewed (by patch-id and sha) and pre-push will not re-review it. A commit
+# PASS it leaves the current HEAD and staged tree, authenticated, in
+# `pending-attest`. This hook runs once the commit exists: it validates the
+# tree and parent relationship before recording the commit as reviewed (by
+# patch-id and sha), so pre-push will not re-review it. A commit
 # made with hooks disabled, via `git am`, or via `git cherry-pick` never wrote
 # a pending file, so it stays unattested and meets the reviewer at push time.
 #
-# The tree comparison is what makes a stale pending file harmless: a review
-# that passed but whose commit was then aborted leaves a pending tree that
-# matches no later commit. `--amend` is fine — the amended commit's tree is
-# exactly the index tree pre-commit saw.
+# The tree and parent comparisons make a stale pending file harmless. An
+# amend may reuse the prior parent only when that prior commit was itself
+# attested; otherwise an aborted review cannot bless an unreviewed amend.
 set -u
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
-CACHE_DIR="$(git rev-parse --git-dir)/review-cache"
-PENDING="$CACHE_DIR/pending-attest"
 
 # shellcheck source=lib/review-core.sh
 . "$ROOT_DIR/.githooks/lib/review-core.sh"
+PENDING="$(review_cache_dir)/pending-attest"
+ATTEST_LOG="$(review_attest_log)"
 
 [ -f "$PENDING" ] || exit 0
-pending_tree="$(cat "$PENDING" 2>/dev/null)"
+IFS=$'\t' read -r pending_head pending_tree pending_mac extra <"$PENDING" || exit 0
 unlink "$PENDING" 2>/dev/null
+
+[ -n "${pending_head:-}" ] && [ -n "${pending_tree:-}" ] && [ -n "${pending_mac:-}" ] && [ -z "${extra:-}" ] || exit 0
+pending_record="$pending_head"$'\t'"$pending_tree"
+expected_mac="$(review_hmac_text pending "$pending_record")" || exit 0
+[ "$pending_mac" = "$expected_mac" ] || exit 0
 
 head_tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" || exit 0
 [ -n "$pending_tree" ] && [ "$pending_tree" = "$head_tree" ] || exit 0
 
-review_attest HEAD
+head_parent="$(git rev-parse -q --verify 'HEAD^' 2>/dev/null)" || head_parent=""
+if [ "$pending_head" = "-" ]; then
+	[ -z "$head_parent" ] || exit 0
+elif [ "$head_parent" != "$pending_head" ]; then
+	pending_parent="$(git rev-parse -q --verify "$pending_head^" 2>/dev/null)" || pending_parent=""
+	[ "$head_parent" = "$pending_parent" ] || exit 0
+	review_is_attested "$pending_head" "$ATTEST_LOG" || exit 0
+fi
+
+review_attest HEAD || echo "[review] WARNING: could not persist the commit attestation; pre-push will re-review."
 exit 0

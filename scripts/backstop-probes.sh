@@ -60,25 +60,65 @@ n="$(wc -l <"$LEDGER" | tr -d ' ')"
 HOOKS=".githooks"
 STUBBIN="$S/bin"
 mkdir -p "$STUBBIN"
-printf '%s\n' '#!/bin/sh' 'cat >/dev/null' 'echo "VERDICT: PASS"' >"$STUBBIN/claude"
+CALL_LOG="$S/claude-calls"
+printf '%s\n' '#!/bin/sh' 'echo called >>"$CALL_LOG"' 'cat >/dev/null' 'echo "VERDICT: PASS"' >"$STUBBIN/claude"
 chmod +x "$STUBBIN/claude";
-export PATH="$STUBBIN:$PATH"
+export CALL_LOG PATH="$STUBBIN:$PATH"
 ATTEST="$GITDIR/review-cache/attested.log"
 PENDING="$GITDIR/review-cache/pending-attest"
 checks=5 # the ledger checks above
 ok() { echo "PASS: $1"; checks=$((checks + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); checks=$((checks + 1)); }
-attested() { [ -s "$ATTEST" ] && grep -q "${TAB}$1${TAB}" "$ATTEST"; }
+attested() { ( . "$HOOKS/lib/review-core.sh"; review_is_attested "$1" "$ATTEST" ); }
 
-# 3.3a: a PASS leaves pending-attest holding exactly the staged tree
+# 3.3a: a PASS leaves an authenticated pending record bound to HEAD and tree
+base_before_review="$(git rev-parse HEAD)"
 printf 'a' >a.txt && git add a.txt
 out="$(bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
 tree="$(git write-tree)"
-if [ "$rc" -eq 0 ] && [ "$(cat "$PENDING" 2>/dev/null)" = "$tree" ]; then
-	ok "PASS writes pending-attest = staged tree"
+IFS=$'\t' read -r pending_head pending_tree pending_mac extra <"$PENDING"
+pending_record="$pending_head"$'\t'"$pending_tree"
+expected_pending_mac="$(. "$HOOKS/lib/review-core.sh"; review_hmac_text pending "$pending_record")"
+if [ "$rc" -eq 0 ] && [ "$pending_head" = "$base_before_review" ] && [ "$pending_tree" = "$tree" ] \
+	&& [ "$pending_mac" = "$expected_pending_mac" ] && [ -z "$extra" ]; then
+	ok "PASS writes an authenticated pending head/tree record"
 else
 	bad "pending-attest after PASS (rc=$rc out=$out)"
 fi
+
+calls_before="$(wc -l <"$CALL_LOG" | tr -d ' ')"
+out="$(bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+calls_after="$(wc -l <"$CALL_LOG" | tr -d ' ')"
+if [ "$rc" -eq 0 ] && [ "$calls_after" -eq "$calls_before" ] \
+	&& printf '%s' "$out" | grep -q 'PASS (cached'; then
+	ok "valid authenticated verdict cache is reused"
+else
+	bad "signed cache hit (rc=$rc calls=$calls_before/$calls_after out=$out)"
+fi
+
+# A cache file without a valid MAC must not supply PASS.
+cache_file="$(find "$GITDIR/review-cache" -type f -name '????????????????????????????????????????' | head -1)"
+printf 'VERDICT: PASS\n' >"$cache_file"
+calls_before="$(wc -l <"$CALL_LOG" | tr -d ' ')"
+out="$(bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+calls_after="$(wc -l <"$CALL_LOG" | tr -d ' ')"
+if [ "$rc" -eq 0 ] && [ "$calls_after" -gt "$calls_before" ] && grep -q '^# HMAC-SHA256:' "$cache_file"; then
+	ok "planted unsigned PASS cache is rejected and rewritten"
+else
+	bad "planted cache (rc=$rc calls=$calls_before/$calls_after out=$out)"
+fi
+
+# Lint still runs before a valid cache hit.
+printf 'REVIEW_LINT_CMD=false\n' >"$HOOKS/review.conf"
+out="$(bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+rm -f "$HOOKS/review.conf"
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'lint step'; then
+	ok "configured failing lint blocks even when a PASS is cached"
+else
+	bad "cached lint check (rc=$rc out=$out)"
+fi
+out="$(bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] || bad "restored cache review did not pass (rc=$rc out=$out)"
 
 # 3.3b: post-commit attests HEAD when its tree matches, and consumes the file
 git commit -q -m "a";
@@ -89,6 +129,37 @@ if [ ! -e "$PENDING" ] && attested "$sha_a"; then
 else
 	bad "post-commit attest (pending=$(cat "$PENDING" 2>/dev/null) log=$(cat "$ATTEST" 2>/dev/null))"
 fi
+
+# Review state written in a linked worktree must be visible from the main checkout.
+WORKTREE="$S/worktree"
+git worktree add -q -b probe-worktree "$WORKTREE" "$sha_a"
+rm -rf "$WORKTREE/.githooks"
+cp -R "$R/.githooks" "$WORKTREE/.githooks"
+(cd "$WORKTREE" && printf 'worktree\n' >worktree.txt && git add worktree.txt \
+	&& git -c core.hooksPath=/dev/null commit -q -m worktree \
+	&& . .githooks/lib/review-core.sh && review_attest HEAD)
+sha_worktree="$(git -C "$WORKTREE" rev-parse HEAD)"
+if attested "$sha_worktree"; then
+	ok "linked-worktree attestation is visible in the main checkout"
+else
+	bad "linked-worktree attestation is not shared"
+fi
+
+# Newlines and non-ASCII characters in paths must survive path collection.
+for unusual_path in $'line\nbreak.py' 'café.py'; do
+	printf 'value = 1\n' >"$unusual_path"
+	git add -- "$unusual_path"
+	calls_before="$(wc -l <"$CALL_LOG" | tr -d ' ')"
+	out="$(bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+	calls_after="$(wc -l <"$CALL_LOG" | tr -d ' ')"
+	if [ "$rc" -eq 0 ] && [ "$calls_after" -gt "$calls_before" ] && [ -f "$PENDING" ]; then
+		ok "staged path is reviewed: $(printf '%s' "$unusual_path" | tr '\n' '?')"
+	else
+		bad "staged unusual path skipped (rc=$rc out=$out)"
+	fi
+	git reset -q -- "$unusual_path"
+	rm -f "$unusual_path" "$PENDING"
+done
 
 # 3.3c: a stale pending tree (review passed, commit aborted, other commit made)
 # is consumed but attests nothing
@@ -110,6 +181,17 @@ if [ ! -e "$PENDING" ]; then
 else
 	bad "fail-open wrote pending-attest"
 fi
+
+printf 'temporary failure\n' >tmp-failure.txt && git add tmp-failure.txt
+out="$(TMPDIR="$S/no-temp-directory" bash "$HOOKS/pre-commit" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$PENDING" ] \
+	&& printf '%s' "$out" | grep -q 'could not create a temporary review directory' \
+	&& grep -q 'temporary review directory' "$LEDGER"; then
+	ok "temporary-directory failure warns, ledgers, and leaves the commit unattested"
+else
+	bad "temporary-directory failure (rc=$rc pending=$([ -e "$PENDING" ] && echo yes || echo no) out=$out)"
+fi
+git reset -q tmp-failure.txt && rm -f tmp-failure.txt
 git commit -q -m "c";
 sha_c="$(git rev-parse HEAD)"
 
@@ -171,6 +253,13 @@ fi
 # 3.4d: BLOCK refuses the push and attests nothing
 printf 'd' >d.txt && git add d.txt && git commit -q -m "d";
 sha_d="$(git rev-parse HEAD)"
+forged_patch="$(. "$HOOKS/lib/review-core.sh"; review_patch_id "$sha_d")"
+printf '%s\t%s\t%s\t%s\n' "$forged_patch" "$sha_d" "2026-01-01T00:00:00Z" forged >>"$ATTEST"
+if ! attested "$sha_d"; then
+	ok "unsigned attestation record is ignored"
+else
+	bad "unsigned attestation record was trusted"
+fi
 stub_review 'echo "[review] BLOCK — at least one BLOCKER finding above."; exit 1'
 out="$(push_line "$sha_c" | bash "$HOOKS/pre-push" 2>&1)"; rc=$?
 if [ "$rc" -eq 1 ] && ! attested "$sha_d"; then
@@ -227,6 +316,50 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "cannot resolve" && ! atteste
 	ok "unresolvable base allows the push and attests nothing"
 else
 	bad "unresolvable base (rc=$rc out=$out)"
+fi
+
+# Stale reviews from another parent and amends of an unattested commit cannot attest.
+STALE_REPO="$S/stale-repo"
+mkdir -p "$STALE_REPO/.githooks/lib"
+cp "$R/.githooks/post-commit" "$STALE_REPO/.githooks/"
+cp "$R/.githooks/lib/review-core.sh" "$STALE_REPO/.githooks/lib/"
+git -C "$STALE_REPO" init -q -b main
+git -C "$STALE_REPO" config user.name probe
+git -C "$STALE_REPO" config user.email probe@example.invalid
+printf 'base\n' >"$STALE_REPO/base.txt"
+git -C "$STALE_REPO" add base.txt && git -C "$STALE_REPO" commit -qm base
+base_sha="$(git -C "$STALE_REPO" rev-parse HEAD)"
+printf 'reviewed tree\n' >"$STALE_REPO/reviewed.txt"
+git -C "$STALE_REPO" add reviewed.txt
+reviewed_tree="$(git -C "$STALE_REPO" write-tree)"
+mkdir -p "$STALE_REPO/.git/review-cache"
+(cd "$STALE_REPO" && . .githooks/lib/review-core.sh && pending_mac="$(review_hmac_text pending "$base_sha"$'\t'"$reviewed_tree")" \
+	&& printf '%s\t%s\t%s\n' "$base_sha" "$reviewed_tree" "$pending_mac" >.git/review-cache/pending-attest)
+git -C "$STALE_REPO" checkout -qb alternate "$base_sha"
+printf 'alternate parent\n' >"$STALE_REPO/alternate.txt"
+git -C "$STALE_REPO" add alternate.txt && git -C "$STALE_REPO" commit -qm alternate
+git -C "$STALE_REPO" read-tree "$reviewed_tree"
+git -C "$STALE_REPO" checkout-index -af
+git -C "$STALE_REPO" -c core.hooksPath=/dev/null commit -qm stale-parent
+stale_parent_sha="$(git -C "$STALE_REPO" rev-parse HEAD)"
+bash "$STALE_REPO/.githooks/post-commit"
+if ! (cd "$STALE_REPO" && . .githooks/lib/review-core.sh && review_is_attested "$stale_parent_sha"); then
+	ok "same reviewed tree with a different parent is not attested"
+else
+	bad "stale pending tree attested a different-parent commit"
+fi
+
+stale_head="$(git -C "$STALE_REPO" rev-parse HEAD)"
+stale_tree="$(git -C "$STALE_REPO" rev-parse 'HEAD^{tree}')"
+(cd "$STALE_REPO" && . .githooks/lib/review-core.sh && pending_mac="$(review_hmac_text pending "$stale_head"$'\t'"$stale_tree")" \
+	&& printf '%s\t%s\t%s\n' "$stale_head" "$stale_tree" "$pending_mac" >.git/review-cache/pending-attest)
+git -C "$STALE_REPO" -c core.hooksPath=/dev/null commit --amend -q --no-edit
+amended_unreviewed_sha="$(git -C "$STALE_REPO" rev-parse HEAD)"
+bash "$STALE_REPO/.githooks/post-commit"
+if ! (cd "$STALE_REPO" && . .githooks/lib/review-core.sh && review_is_attested "$amended_unreviewed_sha"); then
+	ok "amend of an unattested commit remains unattested"
+else
+	bad "amend of an unattested commit was attested"
 fi
 
 # --- 3.5: the timeout watcher --------------------------------------------------

@@ -7,8 +7,9 @@ the push that never passed the first two.
 An AI code review that runs where it can actually stop a bad change: in the
 git hooks on the developer's machine. Every staged diff is reviewed by a
 model against a rubric before the commit lands. Only a `BLOCKER` finding stops
-the commit. Anything that escapes review is caught again at push time. And an
-AI coding agent working in the repository cannot switch any of it off.
+the commit. Anything that escapes review is caught again at push time. A
+Claude Code guard adds defense in depth against common agent bypasses; it is
+not a sandbox or a substitute for host-level execution controls.
 
 Extracted from a live game codebase where it ran on every commit for weeks;
 the rubric, the fail-open rules and the attestation handshake are all shaped
@@ -43,9 +44,9 @@ templates/                    the project rubric starting point
 examples/                     a runnable sample project with fixtures, and the original Roblox setup
 ```
 
-Requirements: bash 3.2 or newer, git, and either the `claude` CLI on `PATH`
-or `ANTHROPIC_API_KEY` in the environment (with `curl` and `python3`). `jq` is
-optional. Runs on macOS and Linux with no other dependencies.
+Requirements: bash 3.2 or newer, git, OpenSSL, and either the `claude` CLI on
+`PATH` or `ANTHROPIC_API_KEY` in the environment (with `curl` and `python3`).
+`jq` is optional. Runs on macOS and Linux.
 
 ## Install
 
@@ -100,9 +101,11 @@ costs nothing.
 A reviewer that times out, is not installed, or returns garbage must not stop
 work, so the commit goes through with a warning. What makes that safe:
 
-- **Attestation.** On a PASS, `pre-commit` records the staged tree. Once the
-  commit exists, `post-commit` checks that HEAD's tree matches and records the
-  commit as reviewed, by patch-id and by sha. A commit made with hooks
+- **Attestation.** On a PASS, `pre-commit` records the current HEAD and staged
+  tree with an authenticated MAC. Once the commit exists, `post-commit` checks
+  the tree and parent relationship, then records the commit as reviewed, by
+  patch-id and by sha. Attestation and cache records are authenticated and
+  shared across linked worktrees. A commit made with hooks
   disabled, by `git am`, by a cherry-pick, or through a fail-open never gets
   a record.
 - **Re-review at push.** `pre-push` looks at every outgoing commit. If all are
@@ -118,7 +121,10 @@ work, so the commit goes through with a warning. What makes that safe:
   whatever was found, is ledgered, and stays unattested.
 
 Humans can still bypass from their own terminal, with the skip variable or
-the `no-verify` flag documented at the top of `pre-commit`. Agents cannot.
+the `no-verify` flag documented at the top of `pre-commit`. The guard blocks
+common bypass forms, including scripts piped or redirected into interpreters,
+but dynamically generated code and execution paths outside the configured
+Claude Code hooks remain host-level concerns.
 
 ## The agent guard
 

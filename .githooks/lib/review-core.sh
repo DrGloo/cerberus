@@ -152,9 +152,22 @@ review_filter_paths() {
 	done
 }
 
+review_filter_paths_z() {
+	local path
+	while IFS= read -r -d '' path; do
+		[ -n "$path" ] || continue
+		if review_is_reviewable_path "$path"; then
+			printf '%s\0' "$path"
+		fi
+	done
+}
+
 # Number of +/- lines a file contributes to a diff file.
 review_changed_line_count() {
 	local diff_file="$1" path="$2"
+	case "$path" in
+		*$'\n'*) printf '2147483647\n'; return ;;
+	esac
 	# Suffix string compare, not a regex: regex metachars in paths (dots) and
 	# unanchored matching ("a.lua" matching "extra.lua") both miscount.
 	awk -v target="$path" '
@@ -200,8 +213,103 @@ review_deleted_refs() {
 # reviews, fail-opens, commits made with hooks disabled, `git am`, and
 # conflict-resolved rebases all meet the reviewer before they leave the
 # machine.
-#   <attest_log>: <patch-id>\t<sha>\t<utc timestamp>
-review_attest_log() { printf '%s/review-cache/attested.log' "$(git rev-parse --git-dir)"; }
+#   <attest_log>: <patch-id>\t<sha>\t<utc timestamp>\t<mac>
+review_cache_dir() {
+	local common root
+	common="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
+	case "$common" in
+		/*) ;;
+		*)
+			root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+			common="$(cd "$root" && cd "$common" && pwd)" || return 1
+			;;
+	esac
+	printf '%s/review-cache\n' "${common%/}"
+}
+
+review_cache_key_file() {
+	local cache_dir
+	cache_dir="$(review_cache_dir)" || return 1
+	printf '%s/key\n' "$cache_dir"
+}
+
+review_ensure_cache_key() {
+	local cache_dir="$1" key_file="$1/key" temporary_key
+	mkdir -p "$cache_dir" || return 1
+	if [ -s "$key_file" ]; then
+		chmod 600 "$key_file" 2>/dev/null || return 1
+		return 0
+	fi
+	temporary_key="$(mktemp "$cache_dir/.key.XXXXXX")" || return 1
+	chmod 600 "$temporary_key" || { rm -f "$temporary_key"; return 1; }
+	openssl rand -hex 32 >"$temporary_key" || {
+		rm -f "$temporary_key"
+		return 1
+	}
+	ln "$temporary_key" "$key_file" 2>/dev/null || true
+	rm -f "$temporary_key"
+	[ -s "$key_file" ] || return 1
+	chmod 600 "$key_file" 2>/dev/null || return 1
+}
+
+review_hmac_file() {
+	local context="$1" input_file="$2" key_file cache_dir key mac
+	key_file="$(review_cache_key_file)" || return 1
+	cache_dir="${key_file%/*}"
+	review_ensure_cache_key "$cache_dir" || return 1
+	key="$(tr -d '\n' <"$key_file")"
+	mac="$(set -o pipefail; { printf '%s\0' "$context"; cat "$input_file"; } \
+		| openssl dgst -sha256 -mac HMAC -macopt "hexkey:$key" \
+		| sed -E 's/^.*= //')" || return 1
+	[ -n "$mac" ] || return 1
+	printf '%s\n' "$mac"
+}
+
+review_hmac_text() {
+	local context="$1" value="$2" key_file cache_dir key mac
+	key_file="$(review_cache_key_file)" || return 1
+	cache_dir="${key_file%/*}"
+	review_ensure_cache_key "$cache_dir" || return 1
+	key="$(tr -d '\n' <"$key_file")"
+	mac="$(set -o pipefail; printf '%s\0%s' "$context" "$value" \
+		| openssl dgst -sha256 -mac HMAC -macopt "hexkey:$key" \
+		| sed -E 's/^.*= //')" || return 1
+	[ -n "$mac" ] || return 1
+	printf '%s\n' "$mac"
+}
+
+review_cache_read() {
+	local cache_file="$1" cache_key="$2" output_file="$3" header expected actual body_file
+	[ -f "$cache_file" ] || return 1
+	IFS= read -r header <"$cache_file" || { rm -f "$cache_file"; return 1; }
+	case "$header" in
+		'# HMAC-SHA256:'*) expected="${header#\# HMAC-SHA256:}" ;;
+		*) rm -f "$cache_file"; return 1 ;;
+	esac
+	body_file="$(mktemp "${TMPDIR:-/tmp}/review-cache-body.XXXXXX")" || return 1
+	tail -n +2 "$cache_file" >"$body_file" || { rm -f "$body_file"; return 1; }
+	actual="$(review_hmac_file "cache:$cache_key" "$body_file")" || { rm -f "$body_file"; return 1; }
+	if [ "$actual" = "$expected" ]; then
+		mv "$body_file" "$output_file"
+		return 0
+	fi
+	rm -f "$body_file" "$cache_file"
+	return 1
+}
+
+review_cache_write() {
+	local cache_file="$1" cache_key="$2" input_file="$3" mac temporary_file
+	mac="$(review_hmac_file "cache:$cache_key" "$input_file")" || return 1
+	temporary_file="$(mktemp "${cache_file}.tmp.XXXXXX")" || return 1
+	{
+		printf '# HMAC-SHA256:%s\n' "$mac"
+		cat "$input_file"
+	} >"$temporary_file" || { rm -f "$temporary_file"; return 1; }
+	chmod 600 "$temporary_file" || { rm -f "$temporary_file"; return 1; }
+	mv "$temporary_file" "$cache_file"
+}
+
+review_attest_log() { printf '%s/attested.log\n' "$(review_cache_dir)"; }
 
 # Stable patch-id of one commit's diff against its first parent (or the empty
 # tree for a root commit). Empty for an empty commit.
@@ -212,24 +320,37 @@ review_patch_id() {
 
 # review_is_attested <sha> [attest_log] -> 0 if recorded (by patch-id or sha).
 review_is_attested() {
-	local sha="$1" log="${2:-$(review_attest_log)}" pid
+	local sha="$1" log="${2:-$(review_attest_log)}" patch_id key_file cache_dir tab logged_patch logged_sha logged_at logged_mac extra record expected_mac
 	[ -s "$log" ] || return 1
-	grep -qF "	$sha	" "$log" && return 0
-	pid="$(review_patch_id "$sha")"
-	[ -z "$pid" ] && return 0 # empty commit: nothing to review
-	grep -q "^${pid}	" "$log"
+	patch_id="$(review_patch_id "$sha")"
+	[ -z "$patch_id" ] && return 0 # empty commit: nothing to review
+	key_file="$(review_cache_key_file)" || return 1
+	cache_dir="${key_file%/*}"
+	review_ensure_cache_key "$cache_dir" || return 1
+	tab="$(printf '\t')"
+	while IFS="$tab" read -r logged_patch logged_sha logged_at logged_mac extra; do
+		[ -n "$logged_patch" ] && [ -n "$logged_sha" ] && [ -n "$logged_at" ] && [ -n "$logged_mac" ] || continue
+		[ -z "$extra" ] || continue
+		[ "$logged_sha" = "$sha" ] || [ "$logged_patch" = "$patch_id" ] || continue
+		record="$logged_patch$tab$logged_sha$tab$logged_at"
+		expected_mac="$(review_hmac_text attestation "$record")" || return 1
+		[ "$expected_mac" = "$logged_mac" ] && return 0
+	done <"$log"
+	return 1
 }
 
 # review_attest <rev>... — append records; capped at the newest 5000 lines.
 review_attest() {
-	local log sha pid now
+	local log sha patch_id now record mac
 	log="$(review_attest_log)"
 	mkdir -p "$(dirname "$log")"
 	now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 	for sha; do
 		sha="$(git rev-parse --verify -q "${sha}^{commit}")" || continue
-		pid="$(review_patch_id "$sha")"
-		printf '%s\t%s\t%s\n' "${pid:--}" "$sha" "$now" >>"$log"
+		patch_id="$(review_patch_id "$sha")"
+		record="${patch_id:--}"$'\t'"$sha"$'\t'"$now"
+		mac="$(review_hmac_text attestation "$record")" || return 1
+		printf '%s\t%s\n' "$record" "$mac" >>"$log" || return 1
 	done
 	if [ "$(wc -l <"$log" | tr -d ' ')" -gt 5000 ]; then
 		tail -n 5000 "$log" >"$log.tmp.$$" && mv "$log.tmp.$$" "$log"
@@ -341,7 +462,7 @@ review_build_prompt() {
 
 		local path count size tmpfull force_full current_text
 		local attach_budget="$REVIEW_MAX_CONTEXT_BYTES"
-		while IFS= read -r path; do
+		while IFS= read -r -d '' path; do
 			[ -n "$path" ] || continue
 			count="$(review_changed_line_count "$diff_file" "$path")"
 			force_full=0
@@ -402,20 +523,20 @@ review_build_prompt() {
 		# The second source is the hunk headers, which carry the enclosing
 		# definition line verbatim. (No comments inside the substitution: an
 		# apostrophe there breaks the bash 3.2 parser.)
-		local fn_names fn
-		fn_names="$( {
+		local function_names function_name
+		function_names="$( {
 			review_definition_names <"$diff_file"
 			sed -nE 's/^@@[^@]*@@ (.*)$/\1/p' "$diff_file" | sed 's/^/ /' | review_definition_names
 		} | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' | sort -u | head -8)"
-		for fn in $fn_names; do
-			printf -- '---- CALLERS: %s ----\n' "$fn"
-			review_grep_tree "(^|[^A-Za-z0-9_])${fn}[[:space:]]*\\(" "$grep_tree" \
+		for function_name in $function_names; do
+			printf -- '---- CALLERS: %s ----\n' "$function_name"
+			review_grep_tree "(^|[^A-Za-z0-9_])${function_name}[[:space:]]*\\(" "$grep_tree" \
 				| grep -vE "$(review_definition_regex)" | head -12 | review_untrusted
 			printf -- '---- END ----\n\n'
 		done
 
 		if [ -s "$deleted_file" ]; then
-			while IFS= read -r path; do
+			while IFS= read -r -d '' path; do
 				[ -n "$path" ] || continue
 				printf -- '---- REMAINING REFERENCES TO DELETED FILE: %s ----\n' "$(review_label "$path")"
 				review_deleted_refs "$path" "$grep_tree" | review_untrusted

@@ -176,7 +176,7 @@ mkdir -p "$P/src"
 	printf '%s\n' 'function wrapInvoke(value)' ' return value' 'end' >src/Handler.lua &&
 	git add . && git commit -qm base)
 printf '%s\n' 'diff --git a/src/Handler.lua b/src/Handler.lua' '--- a/src/Handler.lua' '+++ b/src/Handler.lua' '@@ -1,3 +1,4 @@' ' function wrapInvoke(value)' ' return value' 'end' '+-- changed' >"$S/diff"
-printf '%s\n' src/Handler.lua >"$S/paths"
+printf '%s\0' src/Handler.lua >"$S/paths"
 : >"$S/deleted"
 printf '%s\n' '## Untrusted content' >"$S/rubric"
 (cd "$P" && REVIEW_CONTEXT_PATTERNS='Handler.lua' REVIEW_LINT_TOOLS='selene stylua' REVIEW_HOOK_DIR="$H"; export REVIEW_CONTEXT_PATTERNS REVIEW_LINT_TOOLS REVIEW_HOOK_DIR; . "$H/lib/review-core.sh"; review_build_prompt "$S/diff" "$S/paths" "$S/deleted" "$S/rubric" staged 'git show HEAD:' HEAD "$S/prompt")
@@ -188,7 +188,7 @@ printf '%s\n' 'function validateAmount(value)' ' return value > 0' 'end' >"$P/sr
 printf '%s\n' 'return validateAmount(amount)' >"$P/src/Caller.lua"
 (cd "$P" && git add . && git commit -qm callee)
 printf '%s\n' 'diff --git a/src/Caller.lua b/src/Caller.lua' '--- a/src/Caller.lua' '+++ b/src/Caller.lua' '@@ -0,0 +1 @@' '+return validateAmount(amount)' >"$S/callee.diff"
-printf '%s\n' src/Caller.lua >"$S/callee.paths"
+printf '%s\0' src/Caller.lua >"$S/callee.paths"
 (cd "$P" && REVIEW_CONTEXT_PATTERNS='' REVIEW_LINT_TOOLS='' REVIEW_HOOK_DIR="$H"; export REVIEW_CONTEXT_PATTERNS REVIEW_LINT_TOOLS REVIEW_HOOK_DIR; . "$H/lib/review-core.sh"; review_build_prompt "$S/callee.diff" "$S/callee.paths" "$S/deleted" "$S/rubric" staged 'git show HEAD:' HEAD "$S/callee.prompt")
 grep -q -- '---- CALLEE: validateAmount ----' "$S/callee.prompt" && ok "cross-file callee definition appears in the prompt" || bad "callee context"
 
